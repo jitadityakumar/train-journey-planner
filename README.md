@@ -53,6 +53,13 @@ from GTFS `agency.txt`, e.g. "South Western Railway") alongside a `route_descrip
 "Alton - London Waterloo via Wimbledon"). Journey durations render as "1h6m" rather than a
 bare minute count.
 
+Searches for a date/time already in the past are allowed, not rejected — the loaded feed's
+own date range often starts before "today" (it's a rolling window, refreshed daily), so
+past searches return real scheduled results rather than an error. Both API responses include
+an `is_past` field so consumers can tell past results from upcoming ones; the web results
+page shows a red "Past" badge on each journey when it applies. Only dates outside the feed's
+actual coverage (before its start or after its end) return an error.
+
 Interactive API docs: http://localhost:8000/docs
 
 ## Running tests

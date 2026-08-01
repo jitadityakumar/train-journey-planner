@@ -46,11 +46,13 @@
       {% for j in result.journeys %}
         {% if j.kind == "direct" %}
           <div class="trip">
+            {% if result.is_past %}<span class="badge badge-past">Past</span>{% endif %}
             <span class="badge badge-direct">Direct</span>
             {{ leg(j.direct) }}
           </div>
         {% else %}
           <div class="trip">
+            {% if result.is_past %}<span class="badge badge-past">Past</span>{% endif %}
             <span class="badge badge-change">1 change</span>
             {{ leg(j.interchange.leg1) }}
             <div class="change-marker">

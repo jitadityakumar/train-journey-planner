@@ -16,9 +16,16 @@ Interactive OpenAPI docs are always available at `/docs` on whichever base URL i
 - Stations are identified by 3-letter CRS code (e.g. `BNS`, `WAT`, `CLJ`, `LRD`), National
   Rail's standard station code — not GTFS `stop_id`.
 - All times are UK National Rail schedule times, i.e. Europe/London wall-clock, not UTC.
-  A request with `date`/`time` in the past (London time) returns `400`.
 - Same-day requests are the common case, but `date` can be any date within the loaded GTFS
   feed's range (feed request: `GET /api/journeys`... on an out-of-range date returns `400`).
+- **Past dates/times are allowed, not rejected** (changed 2026-08-01): a query for a
+  date/time already behind the current Europe/London wall-clock time still returns real
+  scheduled results, as long as it falls within the loaded feed's coverage — the feed's
+  own `min_date` is often in the past relative to "now" (it's a rolling ~1-year window,
+  refreshed daily), so this is genuinely useful, not just a leftover-from-yesterday case.
+  Both response shapes carry a new `is_past: bool` field so callers can distinguish
+  "this already happened" from "this is upcoming" without doing their own clock math.
+  Only dates outside the feed's actual min/max coverage (`DateOutOfRangeError`) still `400`.
 - Data source is a nightly-refreshed real GTFS feed (TravelWhiz), not synthetic — results
   reflect actual scheduled services, including calendar exceptions (engineering works, etc).
 - This app only models scheduled/timetabled journeys — it has no live delay/disruption data
@@ -58,6 +65,7 @@ Returns `DirectJourneyResponse`:
   "date": "2026-08-17",
   "window_start": "09:00",
   "window_minutes": 60,
+  "is_past": false,
   "trips": [DirectTripOut, ...]
 }
 ```
@@ -82,6 +90,7 @@ Returns `JourneysResponse`:
   "window_start": "09:00",
   "window_minutes": 60,
   "direct_only": false,
+  "is_past": false,
   "journeys": [JourneyOut, ...]
 }
 ```
@@ -158,6 +167,7 @@ class DirectJourneyResponse:
     date: str
     window_start: str
     window_minutes: int
+    is_past: bool           # true if this date/time is already behind Europe/London "now"
     trips: list[DirectTripOut]
 
 class JourneysResponse:
@@ -167,6 +177,7 @@ class JourneysResponse:
     window_start: str
     window_minutes: int
     direct_only: bool
+    is_past: bool           # true if this date/time is already behind Europe/London "now"
     journeys: list[JourneyOut]
 ```
 
@@ -183,7 +194,7 @@ All error responses use FastAPI's default `{"detail": "..."}` shape (see `ErrorR
 
 | status | cause                                                                  |
 |--------|--------------------------------------------------------------------------|
-| 400    | unknown CRS code, same origin/destination, date out of the feed's covered range, or requested date/time in the past (London time) |
+| 400    | unknown CRS code, same origin/destination, or date out of the feed's covered range (past dates/times within the feed's range are allowed — see `is_past` above, not an error) |
 | 422    | request validation failure (e.g. malformed date/time, `from`/`to` not exactly 3 chars) — standard FastAPI shape, not the custom one below |
 | 503    | GTFS dataset not loaded yet (cold start) — retry shortly              |
 
