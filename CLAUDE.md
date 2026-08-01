@@ -23,9 +23,11 @@ Interactive OpenAPI docs are always available at `/docs` on whichever base URL i
   scheduled results, as long as it falls within the loaded feed's coverage — the feed's
   own `min_date` is often in the past relative to "now" (it's a rolling ~1-year window,
   refreshed daily), so this is genuinely useful, not just a leftover-from-yesterday case.
-  Both response shapes carry a new `is_past: bool` field so callers can distinguish
-  "this already happened" from "this is upcoming" without doing their own clock math.
-  Only dates outside the feed's actual min/max coverage (`DateOutOfRangeError`) still `400`.
+  Every `DirectTripOut` and `JourneyOut` carries its own `is_past: bool` (**not** a single
+  response-level field — see "API field changes" below) so callers can tell which specific
+  results have already departed without doing their own clock math, even within a single
+  window that straddles "now". Only dates outside the feed's actual min/max coverage
+  (`DateOutOfRangeError`) still `400`.
 - Data source is a nightly-refreshed real GTFS feed (TravelWhiz), not synthetic — results
   reflect actual scheduled services, including calendar exceptions (engineering works, etc).
 - This app only models scheduled/timetabled journeys — it has no live delay/disruption data
@@ -65,7 +67,6 @@ Returns `DirectJourneyResponse`:
   "date": "2026-08-17",
   "window_start": "09:00",
   "window_minutes": 60,
-  "is_past": false,
   "trips": [DirectTripOut, ...]
 }
 ```
@@ -90,7 +91,6 @@ Returns `JourneysResponse`:
   "window_start": "09:00",
   "window_minutes": 60,
   "direct_only": false,
-  "is_past": false,
   "journeys": [JourneyOut, ...]
 }
 ```
@@ -135,6 +135,7 @@ class IntermediateStopOut:
 class DirectTripOut:
     trip_id: str
     operator: str | None           # real train-operating company, e.g. "South Western Railway" (from GTFS agency.txt); None if unresolvable
+    operator_code: str | None      # GTFS agency_id short code, e.g. "SW" for South Western Railway; None if unresolvable
     route_description: str | None # route pattern description, e.g. "Alton - London Waterloo via Wimbledon" (route_short_name or route_long_name)
     headsign: str | None
     departure_time: str       # wall-clock "HH:MM:SS"
@@ -142,6 +143,7 @@ class DirectTripOut:
     departure_next_day: bool  # true if this trip's departure is on the day after `date` (post-midnight service)
     arrival_next_day: bool
     duration_minutes: int
+    is_past: bool              # true if THIS trip's own departure_time (+ departure_next_day) is already behind Europe/London "now" — computed per trip, not per response, since a window can straddle "now"
     intermediate_stops: list[IntermediateStopOut]
 
 class InterchangeTripOut:
@@ -158,6 +160,7 @@ class JourneyOut:
     arrival_time: str
     arrival_next_day: bool
     duration_minutes: int
+    is_past: bool              # true if this journey's own departure has already passed (same rule as DirectTripOut.is_past — for "interchange" journeys this mirrors interchange.leg1.is_past, since that's the journey's real departure)
     direct: DirectTripOut | None        # populated iff kind == "direct"
     interchange: InterchangeTripOut | None  # populated iff kind == "interchange"
 
@@ -167,7 +170,6 @@ class DirectJourneyResponse:
     date: str
     window_start: str
     window_minutes: int
-    is_past: bool           # true if this date/time is already behind Europe/London "now"
     trips: list[DirectTripOut]
 
 class JourneysResponse:
@@ -177,15 +179,30 @@ class JourneysResponse:
     window_start: str
     window_minutes: int
     direct_only: bool
-    is_past: bool           # true if this date/time is already behind Europe/London "now"
     journeys: list[JourneyOut]
 ```
 
-`operator` (real train-operating company, from GTFS `agency.txt`) and `route_description`
-(route pattern text, e.g. "Alton - London Waterloo via Wimbledon") were renamed from
-`agency_name`/`operator` respectively on 2026-08-01 — the old names had it backwards
-(`operator` used to hold the route-pattern text, not the operator). This was a breaking
-change to `DirectTripOut`; no backwards-compat aliases were kept.
+## API field changes
+
+- **2026-08-01: `operator` (real train-operating company, from GTFS `agency.txt`) and
+  `route_description` (route pattern text, e.g. "Alton - London Waterloo via Wimbledon")
+  were renamed from `agency_name`/`operator` respectively** — the old names had it backwards
+  (`operator` used to hold the route-pattern text, not the operator). This was a breaking
+  change to `DirectTripOut`; no backwards-compat aliases were kept.
+- **2026-08-01: added `DirectTripOut.operator_code`** — the GTFS `agency_id` short code
+  (e.g. `"SW"`) alongside the existing `operator` full name, from the same already-joined
+  `agency` table. Purely additive, no existing field changed.
+- **2026-08-01: `is_past` moved from response-level to per-trip/per-journey** — it used to
+  be a single `is_past: bool` on `DirectJourneyResponse`/`JourneysResponse`, computed once
+  from the search's own `date`/`time`. That was misleading whenever the search window
+  straddled "now" (e.g. searching a 60-minute window starting a few minutes ago): some
+  results in the same response have already departed and some haven't, but they all got the
+  same flag. Both response-level fields were removed; `DirectTripOut.is_past` and
+  `JourneyOut.is_past` were added instead, each computed from that specific trip/journey's
+  own `departure_time`/`departure_next_day`. This is a **breaking change** — callers reading
+  `body["is_past"]` at the top level must switch to reading it off each trip/journey; no
+  backwards-compat alias was kept, matching the `operator`/`route_description` rename's
+  precedent above.
 
 ## Error responses
 

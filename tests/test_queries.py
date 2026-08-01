@@ -48,6 +48,7 @@ def test_direct_trip_includes_agency_name(conn):
     )
     fast_trip = next(t for t in trips if t.departure_time == "09:06:00")
     assert fast_trip.agency_name == "South Western Railway"
+    assert fast_trip.agency_id == "SW"
 
 
 def test_window_excludes_departures_outside_range(conn):
