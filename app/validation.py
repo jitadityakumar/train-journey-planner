@@ -29,7 +29,7 @@ def validate_query(
     """
     origin = queries.get_station(conn, from_crs)
     destination = queries.get_station(conn, to_crs)
-    if origin.stop_id == destination.stop_id:
+    if queries.is_same_station_group(origin, destination):
         raise queries.SameStationError(origin.stop_code)
     queries.validate_date_in_range(conn, date)
 
