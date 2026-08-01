@@ -405,7 +405,9 @@ def find_journeys(
     window_start: dt.time,
     window_minutes: int,
 ) -> list[Journey]:
-    """Direct and single-interchange journeys, merged and ranked by
+    """Direct and single-interchange journeys, merged and Pareto-filtered
+    (see `_drop_dominated_journeys` — drops journeys no rider has a reason
+    to prefer over some other candidate in the set), then ranked by
     departure time (then duration) — see RESEARCH.md §3's ranking rule."""
     direct_trips = find_direct_trips(conn, origin, destination, date, window_start, window_minutes)
     interchange_trips = find_interchange_trips(conn, origin, destination, date, window_start, window_minutes)
@@ -433,8 +435,86 @@ def find_journeys(
         )
         for i in interchange_trips
     ]
+    journeys = _drop_dominated_journeys(journeys)
     journeys.sort(key=lambda j: (_absolute_minutes(j.departure_time, j.departure_next_day), j.duration_minutes))
     return journeys
+
+
+def _num_changes(journey: Journey) -> int:
+    """A wrong value here doesn't crash — it silently changes which
+    journeys the dominance filter below deletes — so an unrecognized kind
+    (e.g. a future 2+-interchange journey type, see the README's future
+    multi-interchange phase) raises instead of quietly defaulting to 1 and
+    letting a 2-change journey masquerade as a 1-change one that could then
+    dominate, and delete, a genuinely better single-change result."""
+    if journey.kind == "direct":
+        return 0
+    if journey.kind == "interchange":
+        return 1
+    raise ValueError(f"don't know how to count changes for journey kind {journey.kind!r}")
+
+
+def _absolute_seconds(time_str: str, next_day: bool) -> int:
+    """Like _absolute_minutes but to the second — the feed's own times
+    (this app's golden interchange examples included) commonly fall on a
+    :30, and minute-level truncation can make two journeys 30s apart on both
+    ends look tied when one genuinely departs/arrives earlier than the
+    other; that only mattered for sort stability before, but the dominance
+    filter below now uses it to decide what to delete."""
+    t = dt.time.fromisoformat(time_str)
+    seconds = t.hour * 3600 + t.minute * 60 + t.second
+    return seconds + (SECONDS_PER_DAY if next_day else 0)
+
+
+def _dominates(a: tuple[int, int, int], b: tuple[int, int, int]) -> bool:
+    """True if candidate `a` (departure_secs, arrival_secs, num_changes)
+    makes `b` pointless to offer: `a` departs no earlier, arrives no later,
+    and requires no more changes than `b` — and is strictly better on at
+    least one of those, so nothing about `b` gives a rider a reason to
+    prefer it. Ties (identical on all three) don't dominate each other;
+    both are kept, since e.g. two direct trains at the same time are
+    genuinely distinct services (see the interchange dedupe key's own
+    docstring above for the same "don't collapse distinct real choices"
+    principle)."""
+    a_dep, a_arr, a_changes = a
+    b_dep, b_arr, b_changes = b
+    at_least_as_good = a_dep >= b_dep and a_arr <= b_arr and a_changes <= b_changes
+    strictly_better = a_dep > b_dep or a_arr < b_arr or a_changes < b_changes
+    return at_least_as_good and strictly_better
+
+
+def _drop_dominated_journeys(journeys: list[Journey]) -> list[Journey]:
+    """Pareto-filters the merged direct+interchange candidate list (2026-08-01
+    UX review — cuts routes like BNS->WAT down from 1000+ raw candidates,
+    almost all interchange combinations a direct train already beats, to a
+    handful of genuinely distinct choices). Applied uniformly across direct
+    and interchange together, not as a separate "prefer direct" rule: a
+    journey survives only if no other candidate departs at least as late,
+    arrives at least as early, and needs no more changes, while being
+    strictly better on at least one of those — mirroring the dominance
+    RAPTOR computes round-by-round internally (direct/0-change journeys are
+    round 1; a round-2 interchange only survives if it beats what round 1
+    already found), without needing to adopt RAPTOR itself yet (see the
+    README's future multi-interchange phase). This deliberately departs
+    from how e.g. SWR's own journey planner behaves — it lists every
+    scheduled direct train, dominated or not — because this app's whole
+    problem here is candidate-count explosion, and a strictly slower same-
+    or-later-departing direct offers nothing an earlier-arriving one
+    doesn't (ticket/operator/calling-pattern preferences aside, which this
+    filter doesn't model).
+
+    Comparison keys are computed once per journey up front rather than
+    reparsed on every pairwise comparison — with O(n^2) comparisons and a
+    real-feed candidate count that can reach several thousand at
+    MAX_JOURNEYS_WINDOW_MINUTES, reparsing each time made this measurably
+    slow (multi-second) on a wide, mostly-non-dominated result set;
+    precomputed plain-int comparisons don't (~0.2s at ~7000 candidates,
+    measured against the real feed)."""
+    keys = [
+        (_absolute_seconds(j.departure_time, j.departure_next_day), _absolute_seconds(j.arrival_time, j.arrival_next_day), _num_changes(j))
+        for j in journeys
+    ]
+    return [j for i, j in enumerate(journeys) if not any(_dominates(keys[k], keys[i]) for k in range(len(journeys)) if k != i)]
 
 
 def _query_leg1_candidates(
