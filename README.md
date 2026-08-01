@@ -64,6 +64,14 @@ coverage (before its start or after its end) return an error.
 
 Interactive API docs: http://localhost:8000/docs
 
+### Known data gaps
+
+The TravelWhiz feed has a few confirmed gaps that no app-side fix can recover: Farringdon
+(`ZFD`) has no Elizabeth line data at all despite Thameslink being fully present there;
+Oxford Parkway (`OXP`) is entirely missing from the station list; and a residual ~2.5%
+background rate of scattered individual trips are absent with no common pattern. See
+`CLAUDE.md`'s "Known data gaps" section for full detail.
+
 ## Running tests
 
 ```bash

@@ -44,6 +44,36 @@ Interactive OpenAPI docs are always available at `/docs` on whichever base URL i
   (unlike a typical human journey planner) — it's already been pruned to non-dominated
   options. `/api/direct` does not filter — it returns every direct trip in the window.
 
+## Known data gaps in the TravelWhiz feed
+
+Found while extending #11's accuracy comparison against live Darwin data (larger sample,
+1943 live trains across 3 time-of-day runs). Unlike #11's PAD/PDX and LST/LSX split (fixed
+app-side via station aliasing), **these are not fixable in this app's code** — the
+underlying data is genuinely absent from TravelWhiz's feed, not just filed under an
+unexpected CRS code. An empty or short result for these cases means missing data, not
+necessarily "no service exists":
+
+- **Farringdon (`ZFD`) has no Elizabeth line data at all.** Its Thameslink service is fully
+  present, but it has zero trips to/from any Elizabeth line-only station (`PDX`, `LSX`,
+  `BDS`, etc.) in either direction, all day — even though neighboring Elizabeth line
+  stations (Bond Street, Tottenham Court Road, Whitechapel, Canary Wharf) return 330+ trips
+  to `PDX`/`LSX` on the same date. Live Darwin data confirms real Elizabeth line services
+  call at Farringdon; the GTFS feed has no counterpart for any of them.
+- **Oxford Parkway (`OXP`) isn't in the feed at all** — a real, open station, entirely
+  absent from `GET /api/stations` and `stops.txt`. Any query naming it 400s with
+  `unknown station code: OXP`.
+- **A residual ~2.5% background rate of scattered single-train omissions.** Across the
+  1943-train live sample, ~48 trains had no GTFS counterpart at all — not a
+  window-boundary or aliasing artifact, spread across ~30 unrelated route pairs/operators
+  with no obvious common cause. Looks like inherent noise in TravelWhiz's CIF→GTFS
+  conversion rather than a fixable pattern.
+
+None of these have an app-side fix — there's no alternate CRS code or query-logic change
+that recovers the missing data (unlike #11). The only real fixes are upstream (TravelWhiz
+correcting their conversion) or a data-source change (the Phase 3 own-CIF-pipeline
+fallback, currently future-optional, not near-term work). See issue #13 for the full
+investigation.
+
 ## Endpoints
 
 ### `GET /api/direct` — direct trains only
