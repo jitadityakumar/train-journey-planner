@@ -15,3 +15,7 @@ REFRESH_MINUTE = int(os.environ.get("REFRESH_MINUTE", "0"))
 
 DEFAULT_WINDOW_MINUTES = 60
 MIN_CONNECTION_TIME_MINUTES = 5
+# Cap on how long a wait at the interchange is worth showing — an interchange
+# journey with a 3-hour layover isn't a useful "1 change" result even though
+# it's technically valid; see RESEARCH.md §3.
+MAX_CONNECTION_TIME_MINUTES = 90

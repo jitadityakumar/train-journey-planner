@@ -84,6 +84,44 @@ def test_api_direct_malformed_date_returns_422(client):
     assert r.status_code == 422
 
 
+def test_api_journeys_includes_direct_and_interchange(client):
+    r = client.get(
+        "/api/journeys",
+        params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    kinds = {j["kind"] for j in body["journeys"]}
+    assert "direct" in kinds
+    direct_departures = {j["departure_time"] for j in body["journeys"] if j["kind"] == "direct"}
+    assert "09:06:00" in direct_departures
+
+
+def test_api_journeys_golden_interchange(client):
+    r = client.get(
+        "/api/journeys",
+        params={"from": "BNS", "to": "LRD", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    match = next(
+        j
+        for j in body["journeys"]
+        if j["kind"] == "interchange" and j["interchange"]["leg1"]["departure_time"] == "09:06:00"
+    )
+    assert match["interchange"]["interchange"]["crs_code"] == "CLJ"
+    assert match["interchange"]["connection_minutes"] == 28
+    assert match["interchange"]["leg2"]["arrival_time"] == "10:32:30"
+
+
+def test_api_journeys_same_station_returns_400(client):
+    r = client.get(
+        "/api/journeys",
+        params={"from": "BNS", "to": "BNS", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 400
+
+
 def test_health_reports_dataset_present(client):
     r = client.get("/health")
     assert r.status_code == 200
@@ -104,6 +142,16 @@ def test_results_page_renders_golden_path(client):
     assert r.status_code == 200
     assert "09:06" in r.text
     assert "09:35" in r.text
+
+
+def test_results_page_renders_interchange_journey(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "LRD", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    assert "1 change" in r.text
+    assert "Clapham Junction" in r.text
 
 
 def test_results_page_renders_validation_error(client):

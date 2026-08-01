@@ -26,6 +26,8 @@ import datetime as dt
 import sqlite3
 from dataclasses import dataclass, field
 
+from app.config import MAX_CONNECTION_TIME_MINUTES, MIN_CONNECTION_TIME_MINUTES
+
 DAY_COLUMNS = (
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
 )
@@ -100,6 +102,30 @@ class DirectTrip:
     intermediate_stops: list[IntermediateStop] = field(default_factory=list)
 
 
+@dataclass
+class InterchangeTrip:
+    leg1: DirectTrip
+    leg2: DirectTrip
+    interchange: Stop
+    connection_minutes: int
+    total_duration_minutes: int
+
+
+@dataclass
+class Journey:
+    """A direct or single-interchange result, flattened enough for the two
+    kinds to be merged and sorted together (see find_journeys)."""
+
+    kind: str  # "direct" or "interchange"
+    departure_time: str
+    departure_next_day: bool
+    arrival_time: str
+    arrival_next_day: bool
+    duration_minutes: int
+    direct: DirectTrip | None = None
+    interchange: InterchangeTrip | None = None
+
+
 def get_station(conn: sqlite3.Connection, crs_code: str) -> Stop:
     row = conn.execute(
         "SELECT stop_id, stop_code, stop_name FROM stops WHERE stop_code = ? LIMIT 1",
@@ -158,17 +184,8 @@ def find_direct_trips(
     window_start_secs = _time_to_seconds(window_start)
     window_end_secs = window_start_secs + window_minutes * 60
 
-    # Two service-day buckets: `date` itself (offset 0), and `date - 1 day`
-    # shifted forward by 24h (offset 86400) to catch that previous day's
-    # post-midnight (>=24:00:00) continuation trips landing inside today's
-    # window — see module docstring.
-    buckets = [
-        (date, 0),
-        (date - dt.timedelta(days=1), SECONDS_PER_DAY),
-    ]
-
     rows: list[tuple[sqlite3.Row, int]] = []
-    for bucket_date, offset in buckets:
+    for bucket_date, offset in _day_buckets(date):
         bucket_rows = _query_direct_trips(
             conn,
             origin.stop_id,
@@ -206,6 +223,240 @@ def find_direct_trips(
             )
         )
     return results
+
+
+def find_interchange_trips(
+    conn: sqlite3.Connection,
+    origin: Stop,
+    destination: Stop,
+    date: dt.date,
+    window_start: dt.time,
+    window_minutes: int,
+    *,
+    min_connection_minutes: int = MIN_CONNECTION_TIME_MINUTES,
+    max_connection_minutes: int = MAX_CONNECTION_TIME_MINUTES,
+) -> list[InterchangeTrip]:
+    """All single-interchange journeys origin -> C -> destination, where leg 1
+    departs origin within the window and leg 2 departs the interchange stop C
+    between `min_connection_minutes` and `max_connection_minutes` after leg 1
+    arrives (flat minimum connection time — see RESEARCH.md's MCT section;
+    real per-station values aren't available without a CIF-native source).
+
+    Leg 1 (origin -> any downstream stop C) is a bespoke query, since C isn't
+    known in advance. Leg 2 (C -> destination) reuses find_direct_trips
+    directly — a plain direct-route search anchored at the interchange's real
+    arrival time — which gets the post-midnight handling for free (both the
+    interchange's own day-boundary, and the leg-2 window's own).
+
+    Trips that already reach `destination` directly (without changing) are
+    excluded from leg 1's candidates — Phase 1's direct search already finds
+    those, and offering a needless interchange onto a different train would
+    never be a better option, so this is also this function's answer to
+    "de-duplicate against direct results" (see RESEARCH.md §3).
+    """
+    if origin.stop_id == destination.stop_id:
+        raise SameStationError(origin.stop_code)
+
+    window_start_secs = _time_to_seconds(window_start)
+    window_end_secs = window_start_secs + window_minutes * 60
+
+    leg1_rows: list[tuple[sqlite3.Row, dt.date, int]] = []
+    for bucket_date, offset in _day_buckets(date):
+        bucket_rows = _query_leg1_candidates(
+            conn,
+            origin.stop_id,
+            destination.stop_id,
+            DAY_COLUMNS[bucket_date.weekday()],
+            _format_gtfs_date(bucket_date),
+            window_start_secs + offset,
+            window_end_secs + offset,
+        )
+        leg1_rows.extend((row, bucket_date, offset) for row in bucket_rows)
+
+    results: list[InterchangeTrip] = []
+    for row, bucket_date, offset in leg1_rows:
+        leg1_dep_date = _bucket_real_date(bucket_date, offset, row["dep_secs"])
+        leg1_departure_dt = dt.datetime.combine(leg1_dep_date, dt.time()) + dt.timedelta(
+            seconds=row["dep_secs"] % SECONDS_PER_DAY
+        )
+        arrival_date = _bucket_real_date(bucket_date, offset, row["arr_secs"])
+        arrival_dt = dt.datetime.combine(arrival_date, dt.time()) + dt.timedelta(
+            seconds=row["arr_secs"] % SECONDS_PER_DAY
+        )
+
+        dep_time, dep_next_day = _normalize_clock(row["dep_secs"], offset)
+        arr_time, arr_next_day = _normalize_clock(row["arr_secs"], offset)
+        leg1 = DirectTrip(
+            trip_id=row["trip_id"],
+            route_short_name=row["route_short_name"] or None,
+            route_long_name=row["route_long_name"] or None,
+            trip_headsign=row["trip_headsign"] or None,
+            departure_time=dep_time,
+            arrival_time=arr_time,
+            departure_next_day=dep_next_day,
+            arrival_next_day=arr_next_day,
+            duration_minutes=round((row["arr_secs"] - row["dep_secs"]) / 60),
+            intermediate_stops=_intermediate_stops(conn, row["trip_id"], row["origin_seq"], row["interchange_seq"]),
+        )
+        interchange_stop = Stop(
+            stop_id=row["interchange_stop_id"],
+            stop_code=row["interchange_stop_code"],
+            stop_name=row["interchange_stop_name"],
+        )
+
+        leg2_window_start_dt = arrival_dt + dt.timedelta(minutes=min_connection_minutes)
+        leg2_window_minutes = max_connection_minutes - min_connection_minutes
+        leg2_candidates = find_direct_trips(
+            conn,
+            interchange_stop,
+            destination,
+            leg2_window_start_dt.date(),
+            leg2_window_start_dt.time(),
+            leg2_window_minutes,
+        )
+
+        for leg2 in leg2_candidates:
+            if leg2.trip_id == leg1.trip_id:
+                # Same physical trip re-appearing at the interchange stop
+                # (a loop-line service can call at one station twice — see
+                # RESEARCH.md's Data Validation section) isn't a real change.
+                continue
+
+            leg2_anchor_date = leg2_window_start_dt.date()
+            leg2_departure_dt = _combine_with_next_day(
+                leg2_anchor_date, leg2.departure_time, leg2.departure_next_day
+            )
+            leg2_arrival_dt = _combine_with_next_day(
+                leg2_anchor_date, leg2.arrival_time, leg2.arrival_next_day
+            )
+
+            results.append(
+                InterchangeTrip(
+                    leg1=leg1,
+                    leg2=leg2,
+                    interchange=interchange_stop,
+                    connection_minutes=round((leg2_departure_dt - arrival_dt).total_seconds() / 60),
+                    total_duration_minutes=round(
+                        (leg2_arrival_dt - leg1_departure_dt).total_seconds() / 60
+                    ),
+                )
+            )
+
+    return results
+
+
+def find_journeys(
+    conn: sqlite3.Connection,
+    origin: Stop,
+    destination: Stop,
+    date: dt.date,
+    window_start: dt.time,
+    window_minutes: int,
+) -> list[Journey]:
+    """Direct and single-interchange journeys, merged and ranked by
+    departure time (then duration) — see RESEARCH.md §3's ranking rule."""
+    direct_trips = find_direct_trips(conn, origin, destination, date, window_start, window_minutes)
+    interchange_trips = find_interchange_trips(conn, origin, destination, date, window_start, window_minutes)
+
+    journeys = [
+        Journey(
+            kind="direct",
+            departure_time=t.departure_time,
+            departure_next_day=t.departure_next_day,
+            arrival_time=t.arrival_time,
+            arrival_next_day=t.arrival_next_day,
+            duration_minutes=t.duration_minutes,
+            direct=t,
+        )
+        for t in direct_trips
+    ] + [
+        Journey(
+            kind="interchange",
+            departure_time=i.leg1.departure_time,
+            departure_next_day=i.leg1.departure_next_day,
+            arrival_time=i.leg2.arrival_time,
+            arrival_next_day=i.leg2.arrival_next_day,
+            duration_minutes=i.total_duration_minutes,
+            interchange=i,
+        )
+        for i in interchange_trips
+    ]
+    journeys.sort(key=lambda j: (_absolute_minutes(j.departure_time, j.departure_next_day), j.duration_minutes))
+    return journeys
+
+
+def _query_leg1_candidates(
+    conn: sqlite3.Connection,
+    origin_stop_id: str,
+    destination_stop_id: str,
+    day_col: str,
+    date_str: str,
+    lo_secs: int,
+    hi_secs: int,
+) -> list[sqlite3.Row]:
+    """Every (trip, later stop) pair from `origin_stop_id`, for trips that do
+    *not* also reach `destination_stop_id` directly — i.e. every plausible
+    interchange candidate. Naturally bounded by real service patterns (the
+    handful of trips departing in the window, times however many stops each
+    one makes) rather than needing a curated list of major stations."""
+    active_sql = _ACTIVE_SERVICE_IDS_SQL.format(day_col=day_col)
+    sql = f"""
+        SELECT
+            t.trip_id, t.trip_headsign,
+            r.route_short_name, r.route_long_name,
+            a.stop_sequence AS origin_seq, a.departure_secs AS dep_secs,
+            c.stop_id AS interchange_stop_id, c.stop_sequence AS interchange_seq,
+            c.arrival_secs AS arr_secs,
+            cs.stop_code AS interchange_stop_code, cs.stop_name AS interchange_stop_name
+        FROM trips t
+        JOIN stop_times a ON a.trip_id = t.trip_id AND a.stop_id = :origin_id
+        JOIN stop_times c ON c.trip_id = t.trip_id AND c.stop_sequence > a.stop_sequence
+        JOIN stops cs ON cs.stop_id = c.stop_id
+        JOIN routes r ON r.route_id = t.route_id
+        WHERE a.departure_secs >= :lo AND a.departure_secs < :hi
+          AND c.stop_id != :destination_id
+          AND t.service_id IN ({active_sql})
+          AND NOT EXISTS (
+              SELECT 1 FROM stop_times bx
+              WHERE bx.trip_id = t.trip_id AND bx.stop_id = :destination_id
+                AND bx.stop_sequence > a.stop_sequence
+          )
+    """
+    params = {
+        "origin_id": origin_stop_id,
+        "destination_id": destination_stop_id,
+        "date": date_str,
+        "lo": lo_secs,
+        "hi": hi_secs,
+    }
+    return conn.execute(sql, params).fetchall()
+
+
+def _day_buckets(date: dt.date) -> list[tuple[dt.date, int]]:
+    # `date` itself (offset 0), and `date - 1 day` shifted forward by 24h
+    # (offset 86400) to catch that previous day's post-midnight (>=24:00:00)
+    # continuation trips landing inside today's window — see module
+    # docstring.
+    return [(date, 0), (date - dt.timedelta(days=1), SECONDS_PER_DAY)]
+
+
+def _bucket_real_date(bucket_date: dt.date, offset: int, raw_secs: int) -> dt.date:
+    """The real calendar date a raw (possibly >=24h) seconds value falls on,
+    given which day-bucket (see _day_buckets) produced it."""
+    if offset == 0:
+        return bucket_date + dt.timedelta(days=1) if raw_secs >= SECONDS_PER_DAY else bucket_date
+    return bucket_date + dt.timedelta(days=1)
+
+
+def _combine_with_next_day(anchor_date: dt.date, time_str: str, next_day: bool) -> dt.datetime:
+    combined = dt.datetime.combine(anchor_date, dt.time.fromisoformat(time_str))
+    return combined + dt.timedelta(days=1) if next_day else combined
+
+
+def _absolute_minutes(time_str: str, next_day: bool) -> int:
+    t = dt.time.fromisoformat(time_str)
+    minutes = t.hour * 60 + t.minute
+    return minutes + (24 * 60 if next_day else 0)
 
 
 def _query_direct_trips(
