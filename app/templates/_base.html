@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}UK Train Journey Planner{% endblock %}</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --ink: #1c2530;
+      --muted: #5b6b73;
+      --paper: #f7f8f6;
+      --card: #ffffff;
+      --line: #dfe3df;
+      --accent: #29506b;
+      --accent-ink: #ffffff;
+      --good-bg: #eaf5ec;
+      --good-ink: #2c6b3c;
+      --err-bg: #fbeaea;
+      --err-ink: #a03b3b;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ink: #e7e9e4; --muted: #9aa6ab; --paper: #14181c; --card: #1c2126;
+        --line: #2c333a; --accent: #7fa8c4; --accent-ink: #10161b;
+        --good-bg: #17281c; --good-ink: #7bbf8e; --err-bg: #2c1a1a; --err-ink: #d38b8b;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--paper); color: var(--ink);
+      font: 16px/1.5 -apple-system, "Segoe UI", Helvetica Neue, Arial, sans-serif;
+    }
+    .page { max-width: 640px; margin: 0 auto; padding: 2.5rem 1.25rem 4rem; }
+    h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+    .sub { color: var(--muted); margin: 0 0 2rem; font-size: 0.95rem; }
+    .card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+      padding: 1.5rem; margin-bottom: 1.25rem;
+    }
+    form .row { display: flex; gap: 0.75rem; margin-bottom: 1rem; }
+    form .field { flex: 1; display: flex; flex-direction: column; gap: 0.35rem; }
+    label { font-size: 0.82rem; color: var(--muted); font-weight: 600; }
+    input {
+      font: inherit; padding: 0.55rem 0.7rem; border: 1px solid var(--line);
+      border-radius: 6px; background: var(--paper); color: var(--ink); width: 100%;
+    }
+    input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    input[name="from_"], input[name="to"] { text-transform: uppercase; }
+    button {
+      font: inherit; font-weight: 600; padding: 0.65rem 1.1rem; border: none;
+      border-radius: 6px; background: var(--accent); color: var(--accent-ink);
+      cursor: pointer; width: 100%;
+    }
+    button:hover { opacity: 0.92; }
+    .error {
+      background: var(--err-bg); color: var(--err-ink); padding: 0.9rem 1.1rem;
+      border-radius: 8px; margin-bottom: 1.25rem; font-size: 0.92rem;
+    }
+    .trip {
+      border: 1px solid var(--line); border-radius: 8px; padding: 1rem 1.1rem;
+      margin-bottom: 0.8rem;
+    }
+    .trip-head {
+      display: flex; justify-content: space-between; align-items: baseline;
+      font-size: 1.05rem; font-weight: 600;
+    }
+    .trip-meta { color: var(--muted); font-size: 0.85rem; margin-top: 0.2rem; }
+    details { margin-top: 0.6rem; }
+    summary { color: var(--accent); cursor: pointer; font-size: 0.85rem; }
+    .stop-list { margin: 0.5rem 0 0; padding-left: 1.1rem; font-size: 0.85rem; color: var(--muted); }
+    .no-results {
+      background: var(--card); border: 1px dashed var(--line); border-radius: 8px;
+      padding: 1.5rem; text-align: center; color: var(--muted);
+    }
+    a.back { color: var(--accent); font-size: 0.9rem; text-decoration: none; }
+    a.back:hover { text-decoration: underline; }
+    .journey-summary { font-size: 0.9rem; color: var(--muted); margin-bottom: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    {% block content %}{% endblock %}
+  </div>
+</body>
+</html>
