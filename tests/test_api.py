@@ -1,5 +1,39 @@
 from __future__ import annotations
 
+import datetime as dt
+import re
+
+import pytest
+
+from app.main import _next_quarter_hour
+
+
+@pytest.mark.parametrize(
+    "now,expected",
+    [
+        (dt.datetime(2026, 8, 17, 9, 0, 0), dt.datetime(2026, 8, 17, 9, 0, 0)),
+        (dt.datetime(2026, 8, 17, 9, 1, 0), dt.datetime(2026, 8, 17, 9, 15, 0)),
+        (dt.datetime(2026, 8, 17, 9, 14, 59), dt.datetime(2026, 8, 17, 9, 15, 0)),
+        (dt.datetime(2026, 8, 17, 9, 15, 0), dt.datetime(2026, 8, 17, 9, 15, 0)),
+        (dt.datetime(2026, 8, 17, 9, 16, 0), dt.datetime(2026, 8, 17, 9, 30, 0)),
+        # Rolls over into the next calendar day.
+        (dt.datetime(2026, 8, 17, 23, 50, 0), dt.datetime(2026, 8, 18, 0, 0, 0)),
+    ],
+)
+def test_next_quarter_hour(now, expected):
+    assert _next_quarter_hour(now) == expected
+
+
+def test_form_page_defaults_date_and_time_to_next_quarter_hour(client):
+    r = client.get("/")
+    assert r.status_code == 200
+    date_match = re.search(r'id="date"[^>]*value="(\d{4}-\d{2}-\d{2})"', r.text)
+    time_match = re.search(r'id="time"[^>]*value="(\d{2}:\d{2})"', r.text)
+    assert date_match is not None
+    assert time_match is not None
+    minute = int(time_match.group(1).split(":")[1])
+    assert minute in (0, 15, 30, 45)
+
 
 def test_api_direct_golden_path(client):
     r = client.get(

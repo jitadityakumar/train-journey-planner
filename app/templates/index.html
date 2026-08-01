@@ -17,11 +17,11 @@
       <div class="row">
         <div class="field">
           <label for="date">Date</label>
-          <input id="date" name="date" type="date" required>
+          <input id="date" name="date" type="date" value="{{ default_date }}" required>
         </div>
         <div class="field">
           <label for="time">Time</label>
-          <input id="time" name="time" type="time" required>
+          <input id="time" name="time" type="time" step="900" value="{{ default_time }}" required>
         </div>
       </div>
       <button type="submit">Find trains</button>

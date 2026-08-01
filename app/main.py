@@ -117,9 +117,26 @@ def health():
     return {"status": "ok", "dataset_present": config.GTFS_DB_PATH.exists()}
 
 
+def _next_quarter_hour(now: dt.datetime) -> dt.datetime:
+    """Rounds up to the next 15-minute slot (00/15/30/45); if `now` already
+    sits exactly on one, keeps it rather than jumping to the next."""
+    floored = now.replace(minute=(now.minute // 15) * 15, second=0, microsecond=0)
+    if floored < now:
+        floored += dt.timedelta(minutes=15)
+    return floored
+
+
 @app.get("/", response_class=HTMLResponse)
 def form(request: Request):
-    return templates.TemplateResponse(request, "index.html", {})
+    default_dt = _next_quarter_hour(dt.datetime.now(validation.LONDON_TZ))
+    return templates.TemplateResponse(
+        request,
+        "index.html",
+        {
+            "default_date": default_dt.date().isoformat(),
+            "default_time": default_dt.strftime("%H:%M"),
+        },
+    )
 
 
 @app.get("/results", response_class=HTMLResponse)
