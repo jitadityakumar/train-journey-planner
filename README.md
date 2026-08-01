@@ -10,8 +10,12 @@ and the phased roadmap.
 
 ## Status
 
-**Phase 1 + 2: direct routes and single-interchange routes.** Multi-interchange (2+ changes)
-routing is planned for a later phase.
+**Phase 1 + 2: direct routes and single-interchange routes**, plus a Pareto-dominance filter
+that prunes clearly-worse journeys from `/api/journeys` results. Multi-interchange
+(2+ changes) routing is planned for a later phase.
+
+See `CLAUDE.md` for a full API reference (endpoints, query params, response schemas) intended
+for other agents/apps consuming this API programmatically.
 
 ## Running locally
 
@@ -20,18 +24,33 @@ docker compose up
 ```
 
 First start downloads and indexes the GTFS feed (~1-2 minutes); subsequent starts reuse the
-Docker volume. Then visit http://localhost:8000 for the web form, or query the API directly:
+Docker volume. Then visit http://localhost:8000 for the web form (search stations by name or
+CRS code, with autocomplete), or query the API directly:
 
 ```bash
 # Direct trains only
 curl "http://localhost:8000/api/direct?from=BNS&to=WAT&date=2026-08-17&time=09:00"
 
-# Direct + single-interchange journeys, merged and ranked (what the web form uses)
+# Direct + single-interchange journeys, merged, ranked, and dominance-filtered
+# (what the web form uses)
 curl "http://localhost:8000/api/journeys?from=BNS&to=LRD&date=2026-08-17&time=09:00"
+
+# Same, but direct trains only and a wider 120-minute search window
+curl "http://localhost:8000/api/journeys?from=BNS&to=WAT&date=2026-08-17&time=09:00&direct_only=true&window_minutes=120"
+
+# Full station list (CRS code + name) — also powers the web form's autocomplete
+curl "http://localhost:8000/api/stations"
 ```
 
-Interchange journeys use a flat 5-minute minimum connection time (not real per-station
-data — see the planning docs' MCT section) and cap the layover at 90 minutes.
+`/api/journeys` accepts `window_minutes` (default 60, max 180) and `direct_only` (default
+false) query params; the web form exposes both as a search-window dropdown and an
+all-trains/direct-only radio group. Interchange journeys use a flat 5-minute minimum
+connection time (not real per-station data — see the planning docs' MCT section) and cap the
+layover at 90 minutes.
+
+Each direct trip in API/UI output includes the real train operating company (`agency_name`,
+from GTFS `agency.txt`, e.g. "South Western Railway") alongside the existing route-pattern
+description. Journey durations render as "1h6m" rather than a bare minute count.
 
 Interactive API docs: http://localhost:8000/docs
 
