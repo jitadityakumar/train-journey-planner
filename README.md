@@ -48,9 +48,10 @@ all-trains/direct-only radio group. Interchange journeys use a flat 5-minute min
 connection time (not real per-station data — see the planning docs' MCT section) and cap the
 layover at 90 minutes.
 
-Each direct trip in API/UI output includes the real train operating company (`agency_name`,
-from GTFS `agency.txt`, e.g. "South Western Railway") alongside the existing route-pattern
-description. Journey durations render as "1h6m" rather than a bare minute count.
+Each direct trip in API/UI output includes the real train operating company (`operator`,
+from GTFS `agency.txt`, e.g. "South Western Railway") alongside a `route_description` (e.g.
+"Alton - London Waterloo via Wimbledon"). Journey durations render as "1h6m" rather than a
+bare minute count.
 
 Interactive API docs: http://localhost:8000/docs
 
