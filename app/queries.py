@@ -37,7 +37,11 @@ import datetime as dt
 import sqlite3
 from dataclasses import dataclass, field
 
-from app.config import MAX_CONNECTION_TIME_MINUTES, MIN_CONNECTION_TIME_MINUTES
+from app.config import (
+    MAX_CONNECTION_TIME_MINUTES,
+    MIN_CONNECTION_TIME_MINUTES,
+    STATION_ALIASES,
+)
 
 DAY_COLUMNS = (
     "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
@@ -149,13 +153,86 @@ def get_station(conn: sqlite3.Connection, crs_code: str) -> Stop:
     return Stop(stop_id=row["stop_id"], stop_code=row["stop_code"], stop_name=row["stop_name"])
 
 
+_ALIAS_TO_PRIMARY: dict[str, str] = {
+    alias: primary for primary, aliases in STATION_ALIASES.items() for alias in aliases
+}
+# Codes that shouldn't be offered as their own searchable station (see
+# list_stations) — they're folded into their primary code's search
+# automatically via _alias_codes/_alias_stop_ids instead.
+HIDDEN_ALIAS_CODES: frozenset[str] = frozenset(_ALIAS_TO_PRIMARY)
+
+
+def _alias_codes(crs_code: str) -> frozenset[str]:
+    """The full group of CRS-like codes representing the same physical
+    station complex as `crs_code` for direct-route search purposes (see
+    STATION_ALIASES in config.py) — just `{crs_code}` for the overwhelming
+    majority of stations that have no known split."""
+    primary = _ALIAS_TO_PRIMARY.get(crs_code, crs_code)
+    return frozenset({primary, *STATION_ALIASES.get(primary, ())})
+
+
+def is_same_station_group(a: Stop, b: Stop) -> bool:
+    """True if `a` and `b` are literally the same stop, or are the two
+    (mainline/Elizabeth-line) sides of the same alias group (e.g. PAD and
+    PDX — see STATION_ALIASES in config.py). find_direct_trips now treats
+    both sides of an alias group as "the same physical station complex" for
+    search purposes, so a query between them (e.g. from=PAD&to=PDX) is
+    logically a same-station query too, and should be rejected the same way
+    a literal PAD-to-PAD query is — not silently fall through to an empty
+    "no journeys found" result (found in code review, 2026-08-01)."""
+    return a.stop_id == b.stop_id or b.stop_code in _alias_codes(a.stop_code)
+
+
+def _alias_stop_ids(conn: sqlite3.Connection, stop: Stop) -> list[str]:
+    """All stop_ids matching `stop`'s alias group (see _alias_codes),
+    resolved with the same lowest-rowid tie-break get_station/list_stations
+    use, so results are consistent with what a plain single-code lookup
+    would return. Used to widen a direct-route search so e.g. a query
+    against PAD also matches trips that literally depart/arrive at PDX
+    (Paddington's separately-coded Elizabeth line platforms) — see
+    STATION_ALIASES's docstring in config.py. A code missing from this
+    particular feed is skipped rather than erroring, since alias membership
+    is a static list independent of what a given feed snapshot contains."""
+    codes = _alias_codes(stop.stop_code)
+    if len(codes) == 1:
+        return [stop.stop_id]
+    ids = []
+    for code in codes:
+        if code == stop.stop_code:
+            ids.append(stop.stop_id)
+            continue
+        row = conn.execute(
+            "SELECT stop_id FROM stops WHERE stop_code = ? ORDER BY rowid LIMIT 1",
+            (code,),
+        ).fetchone()
+        if row is not None:
+            ids.append(row["stop_id"])
+    return ids
+
+
+def _in_clause(prefix: str, values: list[str]) -> tuple[str, dict[str, str]]:
+    """Builds a parameterized `(:p0, :p1, ...)` SQL fragment for an IN
+    clause over `values` — alias groups are tiny (currently at most 2), so
+    this stays well clear of SQLite's bound-parameter limit even though the
+    rest of this module deliberately avoids inlining dynamic IN lists (see
+    _ACTIVE_SERVICE_IDS_SQL's docstring)."""
+    params = {f"{prefix}{i}": v for i, v in enumerate(values)}
+    return "(" + ", ".join(f":{k}" for k in params) + ")", params
+
+
 def list_stations(conn: sqlite3.Connection) -> list[Stop]:
     """All stations in the feed with a real CRS code, one row per code (a
     code can back multiple stop_id platform records — picks the
     lowest-rowid row per code, same tie-break get_station's unordered
     LIMIT 1 effectively uses, so a station's name is consistent between the
     two). Stops with no CRS code (parent stations, non-rail stops) are
-    excluded rather than collapsed into one bogus NULL-code group."""
+    excluded rather than collapsed into one bogus NULL-code group.
+
+    Codes in HIDDEN_ALIAS_CODES (e.g. PDX, LSX — see STATION_ALIASES in
+    config.py) are excluded too: they're the same physical station complex
+    as their primary code (PAD, LST), already folded into that code's
+    search automatically, and not a code an ordinary rider would think to
+    search for — see GitHub issue #11."""
     rows = conn.execute(
         """
         SELECT stop_id, stop_code, stop_name FROM stops s1
@@ -164,7 +241,11 @@ def list_stations(conn: sqlite3.Connection) -> list[Stop]:
         ORDER BY stop_name
         """
     ).fetchall()
-    return [Stop(stop_id=r["stop_id"], stop_code=r["stop_code"], stop_name=r["stop_name"]) for r in rows]
+    return [
+        Stop(stop_id=r["stop_id"], stop_code=r["stop_code"], stop_name=r["stop_name"])
+        for r in rows
+        if r["stop_code"] not in HIDDEN_ALIAS_CODES
+    ]
 
 
 def feed_date_range(conn: sqlite3.Connection) -> tuple[dt.date, dt.date]:
@@ -208,9 +289,18 @@ def find_direct_trips(
     window_start: dt.time,
     window_minutes: int,
 ) -> list[DirectTrip]:
-    """All direct trips origin -> destination departing within the window on `date`."""
-    if origin.stop_id == destination.stop_id:
+    """All direct trips origin -> destination departing within the window on
+    `date`. Also matches trips at either station's alias stop_ids (e.g. a
+    search against PAD also matches PDX, Paddington's separately-coded
+    Elizabeth line platforms — see STATION_ALIASES in config.py / GitHub
+    issue #11) — a rider at either platform is at the same physical station
+    complex, so this needs no interchange/MCT, unlike find_interchange_trips'
+    genuine interchange search below."""
+    if is_same_station_group(origin, destination):
         raise SameStationError(origin.stop_code)
+
+    origin_stop_ids = _alias_stop_ids(conn, origin)
+    destination_stop_ids = _alias_stop_ids(conn, destination)
 
     window_start_secs = _time_to_seconds(window_start)
     window_end_secs = window_start_secs + window_minutes * 60
@@ -219,8 +309,8 @@ def find_direct_trips(
     for bucket_date, offset in _day_buckets(date, window_start_secs, window_end_secs):
         bucket_rows = _query_direct_trips(
             conn,
-            origin.stop_id,
-            destination.stop_id,
+            origin_stop_ids,
+            destination_stop_ids,
             DAY_COLUMNS[bucket_date.weekday()],
             _format_gtfs_date(bucket_date),
             window_start_secs + offset,
@@ -290,8 +380,11 @@ def find_interchange_trips(
     back on the exact same physical trip_id as leg 1 (possible on loop-line
     services revisiting a stop), which is filtered explicitly below.
     """
-    if origin.stop_id == destination.stop_id:
+    if is_same_station_group(origin, destination):
         raise SameStationError(origin.stop_code)
+
+    origin_stop_ids = _alias_stop_ids(conn, origin)
+    destination_stop_ids = _alias_stop_ids(conn, destination)
 
     window_start_secs = _time_to_seconds(window_start)
     window_end_secs = window_start_secs + window_minutes * 60
@@ -300,8 +393,8 @@ def find_interchange_trips(
     for bucket_date, offset in _day_buckets(date, window_start_secs, window_end_secs):
         bucket_rows = _query_leg1_candidates(
             conn,
-            origin.stop_id,
-            destination.stop_id,
+            origin_stop_ids,
+            destination_stop_ids,
             DAY_COLUMNS[bucket_date.weekday()],
             _format_gtfs_date(bucket_date),
             window_start_secs + offset,
@@ -543,20 +636,29 @@ def _drop_dominated_journeys(journeys: list[Journey]) -> list[Journey]:
 
 def _query_leg1_candidates(
     conn: sqlite3.Connection,
-    origin_stop_id: str,
-    destination_stop_id: str,
+    origin_stop_ids: list[str],
+    destination_stop_ids: list[str],
     day_col: str,
     date_str: str,
     lo_secs: int,
     hi_secs: int,
 ) -> list[sqlite3.Row]:
-    """Every (trip, later stop) pair from `origin_stop_id`, excluding the
-    origin itself (self-interchange on a loop service) and the destination
-    (that's just the direct route, Phase 1's job) as candidate interchange
-    stops. Naturally bounded by real service patterns (the handful of trips
-    departing in the window, times however many stops each one makes)
-    rather than needing a curated list of major stations."""
+    """Every (trip, later stop) pair from `origin_stop_ids`, excluding the
+    origin's own alias group (self-interchange on a loop service) and the
+    destination's alias group (that's just the direct route, already found —
+    with alias merging of its own — by find_direct_trips) as candidate
+    interchange stops. Excluding the *whole* alias group, not just the
+    literal id passed in, matters here: without it, a leg 1 arriving at PDX
+    when the destination is PAD would look like a "genuine" interchange
+    candidate distinct from the direct search, producing a bogus duplicate
+    of a journey find_direct_trips already reports as direct (see
+    STATION_ALIASES in config.py / GitHub issue #11). Naturally bounded by
+    real service patterns (the handful of trips departing in the window,
+    times however many stops each one makes) rather than needing a curated
+    list of major stations."""
     active_sql = _ACTIVE_SERVICE_IDS_SQL.format(day_col=day_col)
+    origin_clause, origin_params = _in_clause("orig", origin_stop_ids)
+    dest_clause, dest_params = _in_clause("dest", destination_stop_ids)
     sql = f"""
         SELECT
             t.trip_id, t.trip_headsign,
@@ -566,19 +668,19 @@ def _query_leg1_candidates(
             c.arrival_secs AS arr_secs,
             cs.stop_code AS interchange_stop_code, cs.stop_name AS interchange_stop_name
         FROM trips t
-        JOIN stop_times a ON a.trip_id = t.trip_id AND a.stop_id = :origin_id
+        JOIN stop_times a ON a.trip_id = t.trip_id AND a.stop_id IN {origin_clause}
         JOIN stop_times c ON c.trip_id = t.trip_id AND c.stop_sequence > a.stop_sequence
         JOIN stops cs ON cs.stop_id = c.stop_id
         JOIN routes r ON r.route_id = t.route_id
         LEFT JOIN agency ag ON ag.agency_id = r.agency_id
         WHERE a.departure_secs >= :lo AND a.departure_secs < :hi
-          AND c.stop_id != :destination_id
-          AND c.stop_id != :origin_id
+          AND c.stop_id NOT IN {dest_clause}
+          AND c.stop_id NOT IN {origin_clause}
           AND t.service_id IN ({active_sql})
     """
     params = {
-        "origin_id": origin_stop_id,
-        "destination_id": destination_stop_id,
+        **origin_params,
+        **dest_params,
         "date": date_str,
         "lo": lo_secs,
         "hi": hi_secs,
@@ -646,14 +748,16 @@ def _rebase_next_day(trip: DirectTrip, *, departure_next_day: bool, arrival_next
 
 def _query_direct_trips(
     conn: sqlite3.Connection,
-    origin_stop_id: str,
-    destination_stop_id: str,
+    origin_stop_ids: list[str],
+    destination_stop_ids: list[str],
     day_col: str,
     date_str: str,
     lo_secs: int,
     hi_secs: int,
 ) -> list[sqlite3.Row]:
     active_sql = _ACTIVE_SERVICE_IDS_SQL.format(day_col=day_col)
+    origin_clause, origin_params = _in_clause("orig", origin_stop_ids)
+    dest_clause, dest_params = _in_clause("dest", destination_stop_ids)
     sql = f"""
         SELECT
             t.trip_id, t.trip_headsign,
@@ -661,8 +765,8 @@ def _query_direct_trips(
             st1.stop_sequence AS origin_seq, st1.departure_secs AS dep_secs,
             st2.stop_sequence AS dest_seq, st2.arrival_secs AS arr_secs
         FROM trips t
-        JOIN stop_times st1 ON st1.trip_id = t.trip_id AND st1.stop_id = :origin_id
-        JOIN stop_times st2 ON st2.trip_id = t.trip_id AND st2.stop_id = :destination_id
+        JOIN stop_times st1 ON st1.trip_id = t.trip_id AND st1.stop_id IN {origin_clause}
+        JOIN stop_times st2 ON st2.trip_id = t.trip_id AND st2.stop_id IN {dest_clause}
         JOIN routes r ON r.route_id = t.route_id
         LEFT JOIN agency ag ON ag.agency_id = r.agency_id
         WHERE st1.stop_sequence < st2.stop_sequence
@@ -670,8 +774,8 @@ def _query_direct_trips(
           AND t.service_id IN ({active_sql})
     """
     params = {
-        "origin_id": origin_stop_id,
-        "destination_id": destination_stop_id,
+        **origin_params,
+        **dest_params,
         "date": date_str,
         "lo": lo_secs,
         "hi": hi_secs,
