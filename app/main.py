@@ -126,6 +126,7 @@ def _validate_or_400(
 def _direct_trip_out(t: queries.DirectTrip) -> DirectTripOut:
     return DirectTripOut(
         trip_id=t.trip_id,
+        agency_name=t.agency_name,
         operator=t.route_short_name or t.route_long_name,
         headsign=t.trip_headsign,
         departure_time=t.departure_time,

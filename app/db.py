@@ -26,6 +26,7 @@ REQUIRED_FILES = (
     "stop_times.txt",
     "calendar.txt",
     "calendar_dates.txt",
+    "agency.txt",
 )
 
 
@@ -75,6 +76,7 @@ def build_database(gtfs_dir: Path, db_path: Path) -> None:
     conn = sqlite3.connect(db_path)
     try:
         _load_stops(gtfs_dir, conn)
+        _load_agency(gtfs_dir, conn)
         _load_routes(gtfs_dir, conn)
         _load_trips(gtfs_dir, conn)
         _load_stop_times(gtfs_dir, conn)
@@ -95,6 +97,16 @@ def _load_stops(gtfs_dir: Path, conn: sqlite3.Connection) -> None:
     df.to_sql("stops", conn, if_exists="replace", index=False)
     conn.execute("CREATE UNIQUE INDEX idx_stops_stop_id ON stops(stop_id)")
     conn.execute("CREATE INDEX idx_stops_stop_code ON stops(stop_code)")
+
+
+def _load_agency(gtfs_dir: Path, conn: sqlite3.Connection) -> None:
+    df = pd.read_csv(
+        gtfs_dir / "agency.txt",
+        dtype=str,
+        usecols=["agency_id", "agency_name"],
+    )
+    df.to_sql("agency", conn, if_exists="replace", index=False)
+    conn.execute("CREATE UNIQUE INDEX idx_agency_agency_id ON agency(agency_id)")
 
 
 def _load_routes(gtfs_dir: Path, conn: sqlite3.Connection) -> None:

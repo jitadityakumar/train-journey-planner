@@ -19,6 +19,7 @@ class IntermediateStopOut(BaseModel):
 
 class DirectTripOut(BaseModel):
     trip_id: str
+    agency_name: str | None
     operator: str | None
     headsign: str | None
     departure_time: str

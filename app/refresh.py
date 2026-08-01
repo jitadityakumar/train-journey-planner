@@ -43,6 +43,11 @@ LONDON_TZ = ZoneInfo("Europe/London")
 
 logger = logging.getLogger("train_journey_planner.refresh")
 
+# `agency` deliberately excluded: an empty/near-empty agency.txt only
+# degrades DirectTrip.agency_name to None (LEFT JOIN, not an inner join),
+# not a crash risk — and the checked-in fixture's agency.txt has just 1 row
+# (real feeds have ~34), so a min-rows check here would need a fixture-only
+# carve-out for no real safety benefit.
 REQUIRED_TABLES_MIN_ROWS = {
     "stops": 100,
     "routes": 10,
