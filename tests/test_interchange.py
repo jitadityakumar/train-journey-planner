@@ -82,11 +82,14 @@ def test_default_min_connection_time_is_five_minutes():
     assert config.MIN_CONNECTION_TIME_MINUTES == 5
 
 
-def test_interchange_excludes_trips_that_reach_destination_directly(conn):
-    """Dedupe rule: a trip that already reaches the destination without
-    changing must never be offered as an interchange leg 1 — Phase 1's
-    direct search already covers it, and a same-train "interchange" would
-    always be a strictly worse (or nonsensical) result."""
+def test_interchange_allows_leg1_trips_that_also_reach_destination_directly(conn):
+    """Corrected dedupe rule (2026-08-01 code review): a trip reaching the
+    destination directly is *not* automatically excluded from being used as
+    leg 1 to some other interchange point — a slow direct service can
+    legitimately lose to changing onto a faster one, so excluding by "does
+    trip1 ever reach the destination" was answering the wrong question. It's
+    only ever pointless when leg 2 would land back on that exact same
+    trip_id — that guard is tested separately below."""
     origin = queries.get_station(conn, "BNS")
     destination = queries.get_station(conn, "WAT")
 
@@ -98,7 +101,31 @@ def test_interchange_excludes_trips_that_reach_destination_directly(conn):
         conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60
     )
     leg1_trip_ids = {r.leg1.trip_id for r in interchange_results}
-    assert direct_trip_ids.isdisjoint(leg1_trip_ids)
+    assert direct_trip_ids & leg1_trip_ids, (
+        "expected at least one trip that reaches WAT directly to also appear "
+        "as a leg-1 candidate toward some other interchange stop"
+    )
+
+
+def test_interchange_keeps_distinct_results_for_different_interchange_stops(conn):
+    """Regression test (2026-08-01): an earlier version of the dedupe step
+    keyed only on (leg1.trip_id, leg2.trip_id), which silently dropped the
+    documented CLJ worked example — the same two physical trains also cross
+    paths at Waterloo, and deduping without the interchange stop in the key
+    collapsed the CLJ result into the shorter-wait Waterloo one, even though
+    they're genuinely different stations a passenger could change at."""
+    origin = queries.get_station(conn, "BNS")
+    destination = queries.get_station(conn, "LRD")
+    results = queries.find_interchange_trips(
+        conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60
+    )
+    stops_for_this_trip_pair = {
+        r.interchange.stop_code
+        for r in results
+        if r.leg1.departure_time == "09:06:00" and r.leg2.arrival_time == "10:32:30"
+    }
+    assert "CLJ" in stops_for_this_trip_pair
+    assert "WAT" in stops_for_this_trip_pair
 
 
 def test_interchange_excludes_same_trip_as_both_legs(conn):

@@ -180,7 +180,7 @@ def api_journeys(
     to: str = Query(..., min_length=3, max_length=3),
     date: dt.date = Query(...),
     time: dt.time = Query(...),
-    window_minutes: int = Query(config.DEFAULT_WINDOW_MINUTES, ge=1, le=24 * 60),
+    window_minutes: int = Query(config.DEFAULT_WINDOW_MINUTES, ge=1, le=config.MAX_JOURNEYS_WINDOW_MINUTES),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Direct and single-interchange journeys, merged and ranked. `/api/direct`
@@ -223,7 +223,7 @@ def results(
     to: str = Query(..., min_length=3, max_length=3),
     date: dt.date = Query(...),
     time: dt.time = Query(...),
-    window_minutes: int = Query(config.DEFAULT_WINDOW_MINUTES, ge=1, le=24 * 60),
+    window_minutes: int = Query(config.DEFAULT_WINDOW_MINUTES, ge=1, le=config.MAX_JOURNEYS_WINDOW_MINUTES),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     error = None

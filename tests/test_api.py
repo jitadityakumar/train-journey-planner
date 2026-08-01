@@ -107,7 +107,9 @@ def test_api_journeys_golden_interchange(client):
     match = next(
         j
         for j in body["journeys"]
-        if j["kind"] == "interchange" and j["interchange"]["leg1"]["departure_time"] == "09:06:00"
+        if j["kind"] == "interchange"
+        and j["interchange"]["leg1"]["departure_time"] == "09:06:00"
+        and j["interchange"]["interchange"]["crs_code"] == "CLJ"
     )
     assert match["interchange"]["interchange"]["crs_code"] == "CLJ"
     assert match["interchange"]["connection_minutes"] == 28
