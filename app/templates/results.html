@@ -12,11 +12,11 @@
   {% if trip.intermediate_stops %}
     <details>
       <summary>{{ trip.intermediate_stops|length }} intermediate stop{{ "" if trip.intermediate_stops|length == 1 else "s" }}</summary>
-      <ol class="stop-list">
+      <ul class="stop-list">
         {% for stop in trip.intermediate_stops %}
           <li>{{ stop.arrival_time[:5] }} {{ stop.stop_name }} ({{ stop.stop_code }})</li>
         {% endfor %}
-      </ol>
+      </ul>
     </details>
   {% endif %}
 {% endmacro %}
