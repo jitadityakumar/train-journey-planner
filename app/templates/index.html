@@ -1,17 +1,19 @@
 {% extends "_base.html" %}
 {% block content %}
   <h1>UK Train Journey Planner</h1>
-  <p class="sub">Direct trains only, for now — enter two CRS station codes, a date, and a time to see everything departing in the next hour.</p>
+  <p class="sub">Enter two stations by name or CRS code, a date, and a time to see everything departing in the next hour — direct trains and journeys with one change.</p>
   <div class="card">
-    <form action="/results" method="get">
+    <form id="search-form" action="/results" method="get">
       <div class="row">
         <div class="field">
-          <label for="from_">From (CRS code)</label>
-          <input id="from_" name="from_" placeholder="BNS" maxlength="3" required autocomplete="off">
+          <label for="from_">From</label>
+          <input id="from_" name="from_" class="station-input" placeholder="Station name or CRS" required autocomplete="off" aria-describedby="from_-error">
+          <span class="field-error" id="from_-error" role="alert" hidden></span>
         </div>
         <div class="field">
-          <label for="to">To (CRS code)</label>
-          <input id="to" name="to" placeholder="WAT" maxlength="3" required autocomplete="off">
+          <label for="to">To</label>
+          <input id="to" name="to" class="station-input" placeholder="Station name or CRS" required autocomplete="off" aria-describedby="to-error">
+          <span class="field-error" id="to-error" role="alert" hidden></span>
         </div>
       </div>
       <div class="row">
@@ -27,4 +29,5 @@
       <button type="submit">Find trains</button>
     </form>
   </div>
+  <script src="/static/app.js"></script>
 {% endblock %}

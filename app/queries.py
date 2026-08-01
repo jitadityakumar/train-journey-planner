@@ -147,6 +147,24 @@ def get_station(conn: sqlite3.Connection, crs_code: str) -> Stop:
     return Stop(stop_id=row["stop_id"], stop_code=row["stop_code"], stop_name=row["stop_name"])
 
 
+def list_stations(conn: sqlite3.Connection) -> list[Stop]:
+    """All stations in the feed with a real CRS code, one row per code (a
+    code can back multiple stop_id platform records — picks the
+    lowest-rowid row per code, same tie-break get_station's unordered
+    LIMIT 1 effectively uses, so a station's name is consistent between the
+    two). Stops with no CRS code (parent stations, non-rail stops) are
+    excluded rather than collapsed into one bogus NULL-code group."""
+    rows = conn.execute(
+        """
+        SELECT stop_id, stop_code, stop_name FROM stops s1
+        WHERE stop_code IS NOT NULL AND TRIM(stop_code) != ''
+          AND rowid = (SELECT MIN(rowid) FROM stops s2 WHERE s2.stop_code = s1.stop_code)
+        ORDER BY stop_name
+        """
+    ).fetchall()
+    return [Stop(stop_id=r["stop_id"], stop_code=r["stop_code"], stop_name=r["stop_name"]) for r in rows]
+
+
 def feed_date_range(conn: sqlite3.Connection) -> tuple[dt.date, dt.date]:
     # Union calendar.txt's start/end range with calendar_dates.txt's own
     # dates — a service_id can exist only via calendar_dates.txt (pure

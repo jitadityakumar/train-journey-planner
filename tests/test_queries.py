@@ -126,3 +126,28 @@ def test_same_origin_and_destination_raises(conn):
     origin = queries.get_station(conn, "BNS")
     with pytest.raises(queries.SameStationError):
         queries.find_direct_trips(conn, origin, origin, dt.date(2026, 8, 17), dt.time(9, 0), 60)
+
+
+def test_list_stations_returns_one_row_per_crs_code(conn):
+    stations = queries.list_stations(conn)
+    codes = [s.stop_code for s in stations]
+    assert len(codes) == len(set(codes))
+    assert "BNS" in codes and "WAT" in codes
+
+
+def test_list_stations_excludes_blank_or_null_crs_codes(conn):
+    # Parent stations / non-rail stops in a real feed can have no CRS code
+    # at all; SQLite's GROUP BY collapses every NULL into one group, so
+    # these must be filtered out rather than surfaced as a bogus station.
+    conn.execute(
+        "INSERT INTO stops (stop_id, stop_code, stop_name) VALUES (?, ?, ?)",
+        ("PARENT1", None, "Some Parent Station"),
+    )
+    conn.execute(
+        "INSERT INTO stops (stop_id, stop_code, stop_name) VALUES (?, ?, ?)",
+        ("PARENT2", "", "Another Parent Station"),
+    )
+    stations = queries.list_stations(conn)
+    assert all(s.stop_code for s in stations)
+    assert "Some Parent Station" not in [s.stop_name for s in stations]
+    assert "Another Parent Station" not in [s.stop_name for s in stations]

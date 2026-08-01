@@ -7,7 +7,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app import config, queries, validation
@@ -24,6 +27,7 @@ from app.schemas import (
 )
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+STATIC_DIR = Path(__file__).resolve().parent / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
@@ -41,6 +45,40 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="UK Train Journey Planner", lifespan=lifespan)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.exception_handler(RequestValidationError)
+async def results_validation_error(request: Request, exc: RequestValidationError):
+    # /results is the HTML page (reachable with JS disabled/broken, or with
+    # an autocomplete entry the client couldn't resolve to a CRS code) — it
+    # should render the same styled error card as any other bad query,
+    # not FastAPI's raw JSON blob. /api/* keeps the default JSON 422.
+    if request.url.path != "/results":
+        return await request_validation_exception_handler(request, exc)
+
+    bad_fields = {str(e["loc"][-1]) for e in exc.errors() if e["loc"] and e["loc"][0] == "query"}
+    if bad_fields & {"from_", "to"}:
+        error = "Couldn't find that station — pick one from the dropdown, or enter its 3-letter CRS code."
+    elif bad_fields & {"date", "time"}:
+        error = "That date or time doesn't look right."
+    else:
+        error = "That search doesn't look right — please check the fields and try again."
+
+    params = request.query_params
+    return templates.TemplateResponse(
+        request,
+        "results.html",
+        {
+            "error": error,
+            "result": None,
+            "from_": params.get("from_", "").upper(),
+            "to": params.get("to", "").upper(),
+            "date": params.get("date", ""),
+            "time": params.get("time", ""),
+        },
+        status_code=422,
+    )
 
 
 def get_db():
@@ -187,6 +225,13 @@ def api_journeys(
     stays direct-only and unchanged — this is the combined view (also what
     the web form/results page uses)."""
     return _run_journeys_query(conn, from_, to, date, time, window_minutes)
+
+
+@app.get("/api/stations", response_model=list[StationOut])
+def api_stations(conn: sqlite3.Connection = Depends(get_db)):
+    """All stations in the loaded feed — powers the search-by-name/CRS
+    autocomplete on the web form."""
+    return [StationOut(crs_code=s.stop_code, name=s.stop_name) for s in queries.list_stations(conn)]
 
 
 @app.get("/health")

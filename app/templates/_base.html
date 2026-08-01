@@ -50,7 +50,16 @@
       border-radius: 6px; background: var(--paper); color: var(--ink); width: 100%;
     }
     input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
-    input[name="from_"], input[name="to"] { text-transform: uppercase; }
+    .autocomplete-wrap { position: relative; display: block; width: 100%; }
+    .autocomplete-menu {
+      position: absolute; top: 100%; left: 0; right: 0; z-index: 10;
+      list-style: none; margin: 0.25rem 0 0; padding: 0.25rem 0; max-height: 12rem;
+      overflow-y: auto; background: var(--card); border: 1px solid var(--line);
+      border-radius: 6px; box-shadow: 0 4px 10px rgba(0, 0, 0, 0.12);
+    }
+    .autocomplete-menu li { padding: 0.4rem 0.7rem; cursor: pointer; font-size: 0.9rem; }
+    .autocomplete-menu li:hover, .autocomplete-menu li.active { background: var(--paper); }
+    .field-error { color: var(--err-ink); font-size: 0.8rem; }
     button {
       font: inherit; font-weight: 600; padding: 0.65rem 1.1rem; border: none;
       border-radius: 6px; background: var(--accent); color: var(--accent-ink);

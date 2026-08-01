@@ -124,6 +124,16 @@ def test_api_journeys_same_station_returns_400(client):
     assert r.status_code == 400
 
 
+def test_api_stations_lists_names_and_crs_codes(client):
+    r = client.get("/api/stations")
+    assert r.status_code == 200
+    stations = r.json()
+    by_crs = {s["crs_code"]: s["name"] for s in stations}
+    assert by_crs["BNS"] == "Barnes"
+    assert by_crs["WAT"] == "London Waterloo"
+    assert len(stations) == len(by_crs)  # one row per CRS code, no duplicates
+
+
 def test_health_reports_dataset_present(client):
     r = client.get("/health")
     assert r.status_code == 200
@@ -163,3 +173,40 @@ def test_results_page_renders_validation_error(client):
     )
     assert r.status_code == 200
     assert "unknown station code" in r.text
+
+
+def test_results_page_renders_friendly_error_for_unresolved_free_text(client):
+    # An autocomplete entry the client failed to resolve to a CRS code (or a
+    # request with JS disabled) sends free text through query params that
+    # are declared 3-char-only — this must render the same styled error
+    # card, not FastAPI's raw JSON validation error.
+    r = client.get(
+        "/results",
+        params={"from_": "London Waterloo", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 422
+    assert "text/html" in r.headers["content-type"]
+    assert "find that station" in r.text
+
+
+def test_results_page_friendly_error_is_tailored_to_bad_date(client):
+    # A validation failure on date/time (not from_/to) should get its own
+    # message, not the station-lookup wording.
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "WAT", "date": "not-a-date", "time": "09:00"},
+    )
+    assert r.status_code == 422
+    assert "date or time" in r.text
+    assert "station" not in r.text.lower()
+
+
+def test_api_direct_still_returns_json_422_for_malformed_query(client):
+    # The friendly-error handler is scoped to /results only — /api/* must
+    # keep FastAPI's default JSON 422 body.
+    r = client.get(
+        "/api/direct",
+        params={"from": "TOOLONG", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 422
+    assert r.headers["content-type"] == "application/json"
