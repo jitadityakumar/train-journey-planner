@@ -207,19 +207,32 @@ def _build_trip_continuations(
             JOIN (
                 SELECT trip_id, MIN(stop_sequence) AS min_seq FROM stop_times GROUP BY trip_id
             ) m ON m.trip_id = st.trip_id AND m.min_seq = st.stop_sequence
+        ),
+        -- Driven by trip_short_name + service_id first (idx_trips_short_name_service),
+        -- not by shared stop_id — a naive stop_id-first join was measured live
+        -- against the real production feed (2026-08-01) to blow up combinatorially
+        -- at busy termini (e.g. Waterloo), where thousands of trips both terminate
+        -- and originate over a full year of schedule data, long before the
+        -- headcode/service/agency filters ever get a chance to narrow it down.
+        -- Same-headcode-and-service-pattern trip pairs are comparatively rare, so
+        -- starting here keeps every subsequent join small.
+        headcode_pairs AS (
+            SELECT t1.trip_id AS trip_id_1, t2.trip_id AS trip_id_2
+            FROM trips t1
+            JOIN trips t2
+              ON t2.trip_short_name = t1.trip_short_name
+             AND t2.service_id = t1.service_id
+             AND t2.trip_id != t1.trip_id
+            JOIN routes r1 ON r1.route_id = t1.route_id
+            JOIN routes r2 ON r2.route_id = t2.route_id
+            WHERE t1.trip_short_name IS NOT NULL AND TRIM(t1.trip_short_name) != ''
+              AND r1.agency_id = r2.agency_id
         )
-        SELECT term.trip_id AS trip_id_1, orig.trip_id AS trip_id_2, term.stop_id AS reversal_stop_id
-        FROM termini term
-        JOIN trips t1 ON t1.trip_id = term.trip_id
-        JOIN routes r1 ON r1.route_id = t1.route_id
-        JOIN origins orig ON orig.stop_id = term.stop_id AND orig.trip_id != term.trip_id
-        JOIN trips t2 ON t2.trip_id = orig.trip_id
-        JOIN routes r2 ON r2.route_id = t2.route_id
-        WHERE t1.service_id = t2.service_id
-          AND t1.trip_short_name IS NOT NULL AND TRIM(t1.trip_short_name) != ''
-          AND t1.trip_short_name = t2.trip_short_name
-          AND r1.agency_id = r2.agency_id
-          AND orig.departure_secs - term.arrival_secs BETWEEN 0 AND :max_gap
+        SELECT hp.trip_id_1, hp.trip_id_2, term.stop_id AS reversal_stop_id
+        FROM headcode_pairs hp
+        JOIN termini term ON term.trip_id = hp.trip_id_1
+        JOIN origins orig ON orig.trip_id = hp.trip_id_2 AND orig.stop_id = term.stop_id
+        WHERE orig.departure_secs - term.arrival_secs BETWEEN 0 AND :max_gap
         """,
         {"max_gap": max_gap_secs},
     ).fetchall()
