@@ -31,6 +31,20 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
+def format_duration(total_minutes: int) -> str:
+    """Renders a duration in minutes as "1h6m" (or "45m" under an hour,
+    "2h" for an exact number of hours) instead of a bare minute count."""
+    hours, minutes = divmod(total_minutes, 60)
+    if hours == 0:
+        return f"{minutes}m"
+    if minutes == 0:
+        return f"{hours}h"
+    return f"{hours}h{minutes}m"
+
+
+templates.env.filters["duration"] = format_duration
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Fire-and-forget in a thread rather than awaiting: a cold start (fresh
