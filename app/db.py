@@ -129,7 +129,13 @@ def _load_stop_times(gtfs_dir: Path, conn: sqlite3.Connection) -> None:
     df["departure_secs"] = _time_to_seconds(df["departure_time"])
     df.to_sql("stop_times", conn, if_exists="replace", index=False)
     conn.execute("CREATE INDEX idx_stop_times_trip_id ON stop_times(trip_id, stop_sequence)")
-    conn.execute("CREATE INDEX idx_stop_times_stop_id ON stop_times(stop_id)")
+    # Composite on (stop_id, departure_secs), not just stop_id: every direct/
+    # leg query filters on both (queries.py's _query_direct_trips and
+    # _query_leg1_candidates), and the plain stop_id prefix still serves
+    # lookups that don't filter on time — found in code review, 2026-08-01,
+    # as the main cost behind Phase 2's per-candidate leg-2 queries scanning
+    # every stop_times row for a hub station instead of a narrow range seek.
+    conn.execute("CREATE INDEX idx_stop_times_stop_id ON stop_times(stop_id, departure_secs)")
 
 
 def _load_calendar(gtfs_dir: Path, conn: sqlite3.Connection) -> None:

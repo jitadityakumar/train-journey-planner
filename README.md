@@ -1,7 +1,8 @@
 # UK Train Journey Planner (GTFS)
 
-Given a departure CRS code, arrival CRS code, a date, and a time, returns all direct trains
-departing within a 1-hour window — via a JSON API and a minimal web form/results page.
+Given a departure CRS code, arrival CRS code, a date, and a time, returns direct and
+single-interchange trains departing within a 1-hour window — via a JSON API and a minimal web
+form/results page.
 
 Data source: [TravelWhiz's `gb-nationalrail.gtfs.zip`](https://storage.travelwhiz.app/generated-gtfs/gb-nationalrail.gtfs.zip),
 refreshed daily. See the project's planning docs (kept outside this repo) for full background
@@ -9,8 +10,8 @@ and the phased roadmap.
 
 ## Status
 
-**Phase 1: direct routes only.** Single-interchange and multi-interchange routing are planned
-for later phases.
+**Phase 1 + 2: direct routes and single-interchange routes.** Multi-interchange (2+ changes)
+routing is planned for a later phase.
 
 ## Running locally
 
@@ -22,8 +23,15 @@ First start downloads and indexes the GTFS feed (~1-2 minutes); subsequent start
 Docker volume. Then visit http://localhost:8000 for the web form, or query the API directly:
 
 ```bash
+# Direct trains only
 curl "http://localhost:8000/api/direct?from=BNS&to=WAT&date=2026-08-17&time=09:00"
+
+# Direct + single-interchange journeys, merged and ranked (what the web form uses)
+curl "http://localhost:8000/api/journeys?from=BNS&to=LRD&date=2026-08-17&time=09:00"
 ```
+
+Interchange journeys use a flat 5-minute minimum connection time (not real per-station
+data — see the planning docs' MCT section) and cap the layover at 90 minutes.
 
 Interactive API docs: http://localhost:8000/docs
 

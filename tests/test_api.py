@@ -84,6 +84,56 @@ def test_api_direct_malformed_date_returns_422(client):
     assert r.status_code == 422
 
 
+def test_api_journeys_includes_direct_and_interchange(client):
+    r = client.get(
+        "/api/journeys",
+        params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    kinds = {j["kind"] for j in body["journeys"]}
+    assert "direct" in kinds
+    direct_departures = {j["departure_time"] for j in body["journeys"] if j["kind"] == "direct"}
+    assert "09:06:00" in direct_departures
+
+
+def test_api_journeys_golden_interchange(client):
+    r = client.get(
+        "/api/journeys",
+        params={"from": "BNS", "to": "LRD", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    match = next(
+        j
+        for j in body["journeys"]
+        if j["kind"] == "interchange"
+        and j["interchange"]["leg1"]["departure_time"] == "09:06:00"
+        and j["interchange"]["interchange"]["crs_code"] == "CLJ"
+    )
+    assert match["interchange"]["interchange"]["crs_code"] == "CLJ"
+    assert match["interchange"]["connection_minutes"] == 28
+    assert match["interchange"]["leg2"]["arrival_time"] == "10:32:30"
+
+
+def test_api_journeys_same_station_returns_400(client):
+    r = client.get(
+        "/api/journeys",
+        params={"from": "BNS", "to": "BNS", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 400
+
+
+def test_api_stations_lists_names_and_crs_codes(client):
+    r = client.get("/api/stations")
+    assert r.status_code == 200
+    stations = r.json()
+    by_crs = {s["crs_code"]: s["name"] for s in stations}
+    assert by_crs["BNS"] == "Barnes"
+    assert by_crs["WAT"] == "London Waterloo"
+    assert len(stations) == len(by_crs)  # one row per CRS code, no duplicates
+
+
 def test_health_reports_dataset_present(client):
     r = client.get("/health")
     assert r.status_code == 200
@@ -106,6 +156,36 @@ def test_results_page_renders_golden_path(client):
     assert "09:35" in r.text
 
 
+def test_results_page_summary_shows_window_as_time_range(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    assert "09:00 to 10:00" in r.text
+    assert "+60min" not in r.text
+
+
+def test_results_page_summary_marks_next_day_when_window_crosses_midnight(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "WAT", "date": "2026-08-17", "time": "23:30"},
+    )
+    assert r.status_code == 200
+    assert "23:30 to 00:30" in r.text
+    assert "<sup>+1</sup>" in r.text
+
+
+def test_results_page_renders_interchange_journey(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "LRD", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    assert "1 change" in r.text
+    assert "Clapham Junction" in r.text
+
+
 def test_results_page_renders_validation_error(client):
     r = client.get(
         "/results",
@@ -113,3 +193,40 @@ def test_results_page_renders_validation_error(client):
     )
     assert r.status_code == 200
     assert "unknown station code" in r.text
+
+
+def test_results_page_renders_friendly_error_for_unresolved_free_text(client):
+    # An autocomplete entry the client failed to resolve to a CRS code (or a
+    # request with JS disabled) sends free text through query params that
+    # are declared 3-char-only — this must render the same styled error
+    # card, not FastAPI's raw JSON validation error.
+    r = client.get(
+        "/results",
+        params={"from_": "London Waterloo", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 422
+    assert "text/html" in r.headers["content-type"]
+    assert "find that station" in r.text
+
+
+def test_results_page_friendly_error_is_tailored_to_bad_date(client):
+    # A validation failure on date/time (not from_/to) should get its own
+    # message, not the station-lookup wording.
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "WAT", "date": "not-a-date", "time": "09:00"},
+    )
+    assert r.status_code == 422
+    assert "date or time" in r.text
+    assert "station" not in r.text.lower()
+
+
+def test_api_direct_still_returns_json_422_for_malformed_query(client):
+    # The friendly-error handler is scoped to /results only — /api/* must
+    # keep FastAPI's default JSON 422 body.
+    r = client.get(
+        "/api/direct",
+        params={"from": "TOOLONG", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 422
+    assert r.headers["content-type"] == "application/json"
