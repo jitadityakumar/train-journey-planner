@@ -30,8 +30,7 @@
   {% elif result %}
     <p class="journey-summary">
       {{ result.journeys|length }} journey{{ "" if result.journeys|length == 1 else "s" }}
-      departing {{ date }} between {{ time }} and
-      {{ (result.window_start ~ "+" ~ result.window_minutes ~ "min") }}.
+      on {{ date }}, {{ time }} to {{ window_end_time }}{% if window_end_next_day %}<sup>+1</sup>{% endif %}.
     </p>
 
     {% if result.journeys %}

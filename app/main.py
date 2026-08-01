@@ -278,6 +278,8 @@ def results(
     except HTTPException as exc:
         error = exc.detail
 
+    window_end = dt.datetime.combine(date, time) + dt.timedelta(minutes=window_minutes)
+
     return templates.TemplateResponse(
         request,
         "results.html",
@@ -288,5 +290,7 @@ def results(
             "to": to.upper(),
             "date": date.isoformat(),
             "time": time.isoformat(timespec="minutes"),
+            "window_end_time": window_end.strftime("%H:%M"),
+            "window_end_next_day": window_end.date() > date,
         },
     )

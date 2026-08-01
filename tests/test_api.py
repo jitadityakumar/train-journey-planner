@@ -156,6 +156,26 @@ def test_results_page_renders_golden_path(client):
     assert "09:35" in r.text
 
 
+def test_results_page_summary_shows_window_as_time_range(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    assert "09:00 to 10:00" in r.text
+    assert "+60min" not in r.text
+
+
+def test_results_page_summary_marks_next_day_when_window_crosses_midnight(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "WAT", "date": "2026-08-17", "time": "23:30"},
+    )
+    assert r.status_code == 200
+    assert "23:30 to 00:30" in r.text
+    assert "<sup>+1</sup>" in r.text
+
+
 def test_results_page_renders_interchange_journey(client):
     r = client.get(
         "/results",
