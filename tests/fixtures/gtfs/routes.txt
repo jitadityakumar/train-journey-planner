@@ -1,0 +1,102 @@
+route_id,agency_id,route_short_name,route_long_name,route_type,route_color,route_text_color
+SW:ACT-WAT,SW,,Ascot - London Waterloo via Staines / Ashford (Surrey),2,0092cb,ffffff
+SW:AON-WAT:1a0adc04,SW,,Alton - London Waterloo via Wimbledon,2,0092cb,ffffff
+SW:AON-WAT:2a20bb6b,SW,,Alton - London Waterloo via Bentley (Hants) / Esher,2,0092cb,ffffff
+SW:AON-WAT:2b644b97,SW,,Alton - London Waterloo via Bentley (Hants) / Walton-on-Thames,2,0092cb,ffffff
+SW:AON-WAT:78a04542,SW,,Alton - London Waterloo via Weybridge / Esher,2,0092cb,ffffff
+SW:BCU-WAT,SW,,Brockenhurst - London Waterloo via Ashurst New Forest / Totton,2,0092cb,ffffff
+SW:BSK-WAT:058382ec,SW,,Basingstoke - London Waterloo via Wimbledon,2,0092cb,ffffff
+SW:BSK-WAT:7ef1affd,SW,,Basingstoke - London Waterloo via Weybridge,2,0092cb,ffffff
+SW:CLC-WAT,SW,,Castle Cary - London Waterloo via Bruton / Frome,2,0092cb,ffffff
+SW:CLJ-GLD,SW,,Clapham Junction - Guildford via Earlsfield / Wimbledon,3,0092cb,ffffff
+SW:CSS-WAT,SW,,Chessington South - London Waterloo via Chessington North / Tolworth,2,0092cb,ffffff
+SW:DKG-WAT,SW,,Dorking - London Waterloo via Box Hill & Westhumble / Leatherhead,2,0092cb,ffffff
+SW:EPS-GLD,SW,,Epsom - Guildford via Ashtead / Leatherhead,3,0092cb,ffffff
+SW:EPS-WAT,SW,,Epsom - London Waterloo via Ewell West / Stoneleigh,3,0092cb,ffffff
+SW:EXD-WAT,SW,,Exeter St Davids - London Waterloo via Exeter Central / Pinhoe,2,0092cb,ffffff
+SW:FNH-WAT,SW,,Farnham - London Waterloo via Aldershot / Ash Vale,2,0092cb,ffffff
+SW:FRM-WAT:1d35da95,SW,,Fareham - London Waterloo via Liphook,2,0092cb,ffffff
+SW:FRM-WAT:43f1e7ba,SW,,Fareham - London Waterloo via Clapham Junction,2,0092cb,ffffff
+SW:GLD-CLJ,SW,,Guildford - Clapham Junction via London Road (Guildford) / Clandon,3,0092cb,ffffff
+SW:GLD-EPS,SW,,Guildford - Epsom via London Road (Guildford) / Clandon,3,0092cb,ffffff
+SW:GLD-WAT:1d425b54,SW,,Guildford - London Waterloo via Hinchley Wood,2,0092cb,ffffff
+SW:GLD-WAT:77f9db2a,SW,,Guildford - London Waterloo via Ewell West,2,0092cb,ffffff
+SW:GLD-WAT:7b78a912,SW,,Guildford - London Waterloo via Queenstown Road (Battersea),2,0092cb,ffffff
+SW:HMC-WAT,SW,,Hampton Court - London Waterloo via Thames Ditton / Surbiton,2,0092cb,ffffff
+SW:HOU-WAT,SW,,Hounslow - London Waterloo via Whitton / Twickenham,2,0092cb,ffffff
+SW:KNG-WAT,SW,,Kingston - London Waterloo via Hampton Wick / Teddington,2,0092cb,ffffff
+SW:PMH-WAT:1fff5a0f,SW,,Portsmouth Harbour - London Waterloo via Haslemere,2,0092cb,ffffff
+SW:PMH-WAT:46f67c21,SW,,Portsmouth Harbour - London Waterloo via Hook / Clapham Junction,2,0092cb,ffffff
+SW:PMH-WAT:62284ba7,SW,,Portsmouth Harbour - London Waterloo via Shawford / Clapham Junction,2,0092cb,ffffff
+SW:PMH-WAT:79004edf,SW,,Portsmouth Harbour - London Waterloo via Esher,2,0092cb,ffffff
+SW:POO-WAT,SW,,Poole - London Waterloo via Parkstone (Dorset) / Branksome,2,0092cb,ffffff
+SW:RDG-WAT:1b685b12,SW,,Reading - London Waterloo via Twickenham,2,0092cb,ffffff
+SW:SHP-WAT:1c09233b,SW,,Shepperton - London Waterloo via Strawberry Hill,2,0092cb,ffffff
+SW:SHP-WAT:4b25947a,SW,,Shepperton - London Waterloo via Norbiton,2,0092cb,ffffff
+SW:SOU-WAT:19185f6e,SW,,Southampton Central - London Waterloo via Hook,2,0092cb,ffffff
+SW:SOU-WAT:1ca9fb3b,SW,,Southampton Central - London Waterloo via St Denys / Worplesdon,2,0092cb,ffffff
+SW:SOU-WAT:52ee479b,SW,,Southampton Central - London Waterloo via Swanwick / Worplesdon,2,0092cb,ffffff
+SW:WAT-ACT,SW,,London Waterloo - Ascot via Vauxhall / Clapham Junction,2,0092cb,ffffff
+SW:WAT-AHT,SW,,London Waterloo - Aldershot via Vauxhall / Clapham Junction,2,0092cb,ffffff
+SW:WAT-AON,SW,,London Waterloo - Alton via Clapham Junction / Surbiton,2,0092cb,ffffff
+SW:WAT-BMH:1538c70e,SW,,London Waterloo - Bournemouth via Woking,2,0092cb,ffffff
+SW:WAT-BSK:2147b81b,SW,,London Waterloo - Basingstoke via Wimbledon / Weybridge,2,0092cb,ffffff
+SW:WAT-BSK:41561819,SW,,London Waterloo - Basingstoke via Wimbledon / Winchfield,2,0092cb,ffffff
+SW:WAT-BSK:67196356,SW,,London Waterloo - Basingstoke via West Byfleet,2,0092cb,ffffff
+SW:WAT-CSS,SW,,London Waterloo - Chessington South via Vauxhall / Clapham Junction,2,0092cb,ffffff
+SW:WAT-DKG,SW,,London Waterloo - Dorking via Vauxhall / Clapham Junction,2,0092cb,ffffff
+SW:WAT-EPS,SW,,London Waterloo - Epsom via Vauxhall / Clapham Junction,3,0092cb,ffffff
+SW:WAT-EXD,SW,,London Waterloo - Exeter St Davids via Clapham Junction / Woking,2,0092cb,ffffff
+SW:WAT-FNH,SW,,London Waterloo - Farnham via Vauxhall / Clapham Junction,2,0092cb,ffffff
+SW:WAT-GLD:0fa182e7,SW,,London Waterloo - Guildford via Esher,2,0092cb,ffffff
+SW:WAT-GLD:1f118357,SW,,London Waterloo - Guildford via Ewell West,2,0092cb,ffffff
+SW:WAT-GLD:437d1f6d,SW,,London Waterloo - Guildford via Hinchley Wood,2,0092cb,ffffff
+SW:WAT-HMC,SW,,London Waterloo - Hampton Court via Vauxhall / Clapham Junction,2,0092cb,ffffff
+SW:WAT-HOU,SW,,London Waterloo - Hounslow via Vauxhall / Queenstown Road (Battersea),2,0092cb,ffffff
+SW:WAT-KNG,SW,,London Waterloo - Kingston via Vauxhall / Queenstown Road (Battersea),2,0092cb,ffffff
+SW:WAT-PMH:0d0418d3,SW,,London Waterloo - Portsmouth Harbour via Worplesdon,2,0092cb,ffffff
+SW:WAT-PMH:26165ad9,SW,,London Waterloo - Portsmouth Harbour via West Byfleet,2,0092cb,ffffff
+SW:WAT-PMH:38086d89,SW,,London Waterloo - Portsmouth Harbour via Micheldever,2,0092cb,ffffff
+SW:WAT-PMH:7fb79845,SW,,London Waterloo - Portsmouth Harbour via Esher,2,0092cb,ffffff
+SW:WAT-POO:30794bb5,SW,,London Waterloo - Poole via Woking / Ashurst New Forest / Branksome,2,0092cb,ffffff
+SW:WAT-POO:387d1e0a,SW,,London Waterloo - Poole via Beaulieu Road,2,0092cb,ffffff
+SW:WAT-POO:4bd149ae,SW,,London Waterloo - Poole via St Denys,2,0092cb,ffffff
+SW:WAT-RDG:37835eb3,SW,,London Waterloo - Reading via Twickenham,2,0092cb,ffffff
+SW:WAT-SAL,SW,,London Waterloo - Salisbury via Clapham Junction / Woking,2,0092cb,ffffff
+SW:WAT-SHP:333afab8,SW,,London Waterloo - Shepperton via Norbiton,2,0092cb,ffffff
+SW:WAT-SHP:34881e71,SW,,London Waterloo - Shepperton via Strawberry Hill,2,0092cb,ffffff
+SW:WAT-SOU:0e06fc02,SW,,London Waterloo - Southampton Central via Liss,2,0092cb,ffffff
+SW:WAT-SOU:1270a46a,SW,,London Waterloo - Southampton Central via Micheldever,2,0092cb,ffffff
+SW:WAT-SOU:40a60cae,SW,,London Waterloo - Southampton Central via Wimbledon / Eastleigh,2,0092cb,ffffff
+SW:WAT-SOU:784ac9e0,SW,,London Waterloo - Southampton Central via Weybridge,2,0092cb,ffffff
+SW:WAT-SUR:736a3ff0,SW,,London Waterloo - Surbiton via Norbiton,3,0092cb,ffffff
+SW:WAT-TWI:0b61e7a4,SW,,London Waterloo - Twickenham via New Malden,3,0092cb,ffffff
+SW:WAT-TWI:5152092b,SW,,London Waterloo - Twickenham via Twickenham,2,0092cb,ffffff
+SW:WAT-WAT:293c602c,SW,,London Waterloo - London Waterloo via Whitton / Isleworth,2,0092cb,ffffff
+SW:WAT-WAT:3df31cd3,SW,,London Waterloo - London Waterloo via Isleworth / Whitton,2,0092cb,ffffff
+SW:WAT-WAT:49c59664,SW,,London Waterloo - London Waterloo via Twickenham / Strawberry Hill,2,0092cb,ffffff
+SW:WAT-WAT:51626cb5,SW,,London Waterloo - London Waterloo via Strawberry Hill / Twickenham,2,0092cb,ffffff
+SW:WAT-WEY:175b80b9,SW,,London Waterloo - Weymouth via Beaulieu Road,2,0092cb,ffffff
+SW:WAT-WEY:6815aee5,SW,,London Waterloo - Weymouth via Holton Heath,2,0092cb,ffffff
+SW:WAT-WEY:6e5074be,SW,,London Waterloo - Weymouth via Micheldever,2,0092cb,ffffff
+SW:WAT-WNR:38cd014f,SW,,London Waterloo - Windsor & Eton Riverside via Richmond (London),2,0092cb,ffffff
+SW:WAT-WNR:5ac3eba2,SW,,London Waterloo - Windsor & Eton Riverside via Kew Bridge,2,0092cb,ffffff
+SW:WAT-WOK:39dd422c,SW,,London Waterloo - Woking via Berrylands,2,0092cb,ffffff
+SW:WAT-WOK:4f2b0e20,SW,,London Waterloo - Woking via Isleworth,2,0092cb,ffffff
+SW:WAT-WOK:60b7f5dc,SW,,London Waterloo - Woking via Twickenham,2,0092cb,ffffff
+SW:WAT-WSB,SW,,London Waterloo - Westbury (Wilts) via Clapham Junction / Basingstoke,2,0092cb,ffffff
+SW:WAT-WYB:2f0bc713,SW,,London Waterloo - Weybridge via Brentford,2,0092cb,ffffff
+SW:WAT-WYB:5a07a265,SW,,London Waterloo - Weybridge via St Margarets (London),2,0092cb,ffffff
+SW:WAT-YVJ:037c5f5f,SW,,London Waterloo - Yeovil Junction via Tisbury,2,0092cb,ffffff
+SW:WAT-YVJ:54c50d52,SW,,London Waterloo - Yeovil Junction via Warminster,2,0092cb,ffffff
+SW:WCP-WAT,SW,,Worcester Park - London Waterloo via Motspur Park / Raynes Park,3,0092cb,ffffff
+SW:WEY-WAT:0287e2bc,SW,,Weymouth - London Waterloo via Pokesdown / Surbiton,2,0092cb,ffffff
+SW:WEY-WAT:36053452,SW,,Weymouth - London Waterloo via Moreton (Dorset) / Holton Heath / Basingstoke,2,0092cb,ffffff
+SW:WEY-WAT:4c067165,SW,,Weymouth - London Waterloo via Moreton (Dorset) / Holton Heath / Totton,2,0092cb,ffffff
+SW:WEY-WAT:5504164c,SW,,Weymouth - London Waterloo via Holton Heath / Hinton Admiral / Basingstoke,2,0092cb,ffffff
+SW:WEY-WAT:56977163,SW,,Weymouth - London Waterloo via Farnborough (Main),2,0092cb,ffffff
+SW:WNR-WAT:4734a6e8,SW,,Windsor & Eton Riverside - London Waterloo via Kew Bridge,2,0092cb,ffffff
+SW:WNR-WAT:56aa1fac,SW,,Windsor & Eton Riverside - London Waterloo via Richmond (London),2,0092cb,ffffff
+SW:WOK-WAT:39dbebbb,SW,,Woking - London Waterloo via Isleworth,2,0092cb,ffffff
+SW:WYB-WAT:30d463ec,SW,,Weybridge - London Waterloo via Brentford,2,0092cb,ffffff
+SW:YVP-WAT,SW,,Yeovil Pen Mill - London Waterloo via Yeovil Junction / Sherborne,2,0092cb,ffffff

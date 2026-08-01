@@ -1,0 +1,42 @@
+{% extends "_base.html" %}
+{% block content %}
+  <a class="back" href="/">&larr; New search</a>
+  <h1>{{ from_ }} &rarr; {{ to }}</h1>
+
+  {% if error %}
+    <div class="error">{{ error }}</div>
+  {% elif journey %}
+    <p class="journey-summary">
+      {{ journey.trips|length }} direct train{{ "" if journey.trips|length == 1 else "s" }}
+      departing {{ date }} between {{ time }} and
+      {{ (journey.window_start ~ "+" ~ journey.window_minutes ~ "min") }}.
+    </p>
+
+    {% if journey.trips %}
+      {% for trip in journey.trips %}
+        <div class="trip">
+          <div class="trip-head">
+            <span>{{ trip.departure_time[:5] }}{% if trip.departure_next_day %}<sup>+1</sup>{% endif %} &rarr; {{ trip.arrival_time[:5] }}{% if trip.arrival_next_day %}<sup>+1</sup>{% endif %}</span>
+            <span>{{ trip.duration_minutes }} min</span>
+          </div>
+          <div class="trip-meta">
+            {% if trip.operator %}{{ trip.operator }}{% endif %}
+            {% if trip.headsign %} &middot; towards {{ trip.headsign }}{% endif %}
+          </div>
+          {% if trip.intermediate_stops %}
+            <details>
+              <summary>{{ trip.intermediate_stops|length }} intermediate stop{{ "" if trip.intermediate_stops|length == 1 else "s" }}</summary>
+              <ol class="stop-list">
+                {% for stop in trip.intermediate_stops %}
+                  <li>{{ stop.arrival_time[:5] }} {{ stop.stop_name }} ({{ stop.stop_code }})</li>
+                {% endfor %}
+              </ol>
+            </details>
+          {% endif %}
+        </div>
+      {% endfor %}
+    {% else %}
+      <div class="no-results">No direct trains found in this window.</div>
+    {% endif %}
+  {% endif %}
+{% endblock %}
