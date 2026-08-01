@@ -107,13 +107,16 @@ def test_interchange_allows_leg1_trips_that_also_reach_destination_directly(conn
     )
 
 
-def test_interchange_keeps_distinct_results_for_different_interchange_stops(conn):
-    """Regression test (2026-08-01): an earlier version of the dedupe step
-    keyed only on (leg1.trip_id, leg2.trip_id), which silently dropped the
-    documented CLJ worked example — the same two physical trains also cross
-    paths at Waterloo, and deduping without the interchange stop in the key
-    collapsed the CLJ result into the shorter-wait Waterloo one, even though
-    they're genuinely different stations a passenger could change at."""
+def test_interchange_keeps_only_the_earliest_interchange_stop_per_trip_pair(conn):
+    """Regression test (2026-08-01, real user-reported case): the same two
+    physical trains (leg1 09:06:00 BNS->WAT, leg2 ->10:32:30 LRD) cross paths
+    at three shared stops in this fixture — CLJ (leg1 arrives 09:14:00),
+    VXH (09:21:00), and WAT (09:26:00) — all producing the exact same
+    overall journey (same departure, same arrival, same duration), since
+    leg1's own departure and leg2's own arrival don't depend on which shared
+    stop you change at. Only CLJ, the earliest one leg1 reaches, should
+    survive — showing the same journey three times over (once per
+    interchange stop) is noise, not a real choice."""
     origin = queries.get_station(conn, "BNS")
     destination = queries.get_station(conn, "LRD")
     results = queries.find_interchange_trips(
@@ -124,8 +127,7 @@ def test_interchange_keeps_distinct_results_for_different_interchange_stops(conn
         for r in results
         if r.leg1.departure_time == "09:06:00" and r.leg2.arrival_time == "10:32:30"
     }
-    assert "CLJ" in stops_for_this_trip_pair
-    assert "WAT" in stops_for_this_trip_pair
+    assert stops_for_this_trip_pair == {"CLJ"}
 
 
 def test_interchange_excludes_same_trip_as_both_legs(conn):
@@ -193,6 +195,29 @@ def test_dominated_journeys_are_filtered_from_bns_wat(conn):
 
     assert journeys, "expected at least the direct BNS->WAT trips"
     assert all(j.kind == "direct" for j in journeys), "no interchange should beat this route's direct service"
+
+
+def test_find_journeys_direct_only_excludes_interchange_results(conn):
+    """BNS -> LRD has no direct route at all (see the module's other tests) —
+    with direct_only=True the interchange search shouldn't even run, so the
+    result should be empty rather than falling back to interchange results."""
+    origin = queries.get_station(conn, "BNS")
+    destination = queries.get_station(conn, "LRD")
+    journeys = queries.find_journeys(
+        conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60, direct_only=True
+    )
+    assert journeys == []
+
+
+def test_find_journeys_direct_only_keeps_direct_results(conn):
+    origin = queries.get_station(conn, "BNS")
+    destination = queries.get_station(conn, "WAT")
+    all_journeys = queries.find_journeys(conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60)
+    direct_only_journeys = queries.find_journeys(
+        conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60, direct_only=True
+    )
+    assert all(j.kind == "direct" for j in direct_only_journeys)
+    assert direct_only_journeys == [j for j in all_journeys if j.kind == "direct"]
 
 
 def test_dominated_interchange_dropped_when_a_later_departure_reaches_the_same_arrival(conn):

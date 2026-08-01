@@ -50,6 +50,20 @@
       border-radius: 6px; background: var(--paper); color: var(--ink); width: 100%;
     }
     input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    select {
+      font: inherit; padding: 0.55rem 0.7rem; border: 1px solid var(--line);
+      border-radius: 6px; background: var(--paper); color: var(--ink); width: 100%;
+    }
+    select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+    .radio-group {
+      display: flex; gap: 1.1rem; align-items: center; height: 100%;
+      padding: 0.55rem 0;
+    }
+    .radio-option {
+      display: flex; align-items: center; gap: 0.35rem; font-size: 0.9rem;
+      font-weight: 400; color: var(--ink); cursor: pointer;
+    }
+    .radio-option input { width: auto; }
     .autocomplete-wrap { position: relative; display: block; width: 100%; }
     .autocomplete-menu {
       position: absolute; top: 100%; left: 0; right: 0; z-index: 10;
@@ -97,7 +111,7 @@
     }
     details { margin-top: 0.6rem; }
     summary { color: var(--accent); cursor: pointer; font-size: 0.85rem; }
-    .stop-list { margin: 0.5rem 0 0; padding-left: 1.1rem; font-size: 0.85rem; color: var(--muted); }
+    .stop-list { margin: 0.5rem 0 0; padding-left: 0; list-style: none; font-size: 0.85rem; color: var(--muted); }
     .no-results {
       background: var(--card); border: 1px dashed var(--line); border-radius: 8px;
       padding: 1.5rem; text-align: center; color: var(--muted);

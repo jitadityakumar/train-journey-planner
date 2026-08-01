@@ -159,9 +159,10 @@ def _run_journeys_query(
     date: dt.date,
     time: dt.time,
     window_minutes: int,
+    direct_only: bool = False,
 ) -> JourneysResponse:
     origin, destination = _validate_or_400(conn, from_crs, to_crs, date, time)
-    journeys = queries.find_journeys(conn, origin, destination, date, time, window_minutes)
+    journeys = queries.find_journeys(conn, origin, destination, date, time, window_minutes, direct_only)
 
     journey_outs = []
     for j in journeys:
@@ -196,6 +197,7 @@ def _run_journeys_query(
         date=date.isoformat(),
         window_start=time.isoformat(timespec="minutes"),
         window_minutes=window_minutes,
+        direct_only=direct_only,
         journeys=journey_outs,
     )
 
@@ -219,12 +221,13 @@ def api_journeys(
     date: dt.date = Query(...),
     time: dt.time = Query(...),
     window_minutes: int = Query(config.DEFAULT_WINDOW_MINUTES, ge=1, le=config.MAX_JOURNEYS_WINDOW_MINUTES),
+    direct_only: bool = Query(False, description="If true, return only direct trains (no single-change journeys)."),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     """Direct and single-interchange journeys, merged and ranked. `/api/direct`
     stays direct-only and unchanged — this is the combined view (also what
     the web form/results page uses)."""
-    return _run_journeys_query(conn, from_, to, date, time, window_minutes)
+    return _run_journeys_query(conn, from_, to, date, time, window_minutes, direct_only)
 
 
 @app.get("/api/stations", response_model=list[StationOut])
@@ -257,6 +260,7 @@ def form(request: Request):
         {
             "default_date": default_dt.date().isoformat(),
             "default_time": default_dt.strftime("%H:%M"),
+            "default_window_minutes": config.DEFAULT_WINDOW_MINUTES,
         },
     )
 
@@ -269,12 +273,13 @@ def results(
     date: dt.date = Query(...),
     time: dt.time = Query(...),
     window_minutes: int = Query(config.DEFAULT_WINDOW_MINUTES, ge=1, le=config.MAX_JOURNEYS_WINDOW_MINUTES),
+    direct_only: bool = Query(False),
     conn: sqlite3.Connection = Depends(get_db),
 ):
     error = None
     result = None
     try:
-        result = _run_journeys_query(conn, from_, to, date, time, window_minutes)
+        result = _run_journeys_query(conn, from_, to, date, time, window_minutes, direct_only)
     except HTTPException as exc:
         error = exc.detail
 
@@ -292,5 +297,6 @@ def results(
             "time": time.isoformat(timespec="minutes"),
             "window_end_time": window_end.strftime("%H:%M"),
             "window_end_next_day": window_end.date() > date,
+            "direct_only": direct_only,
         },
     )

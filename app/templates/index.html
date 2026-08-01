@@ -1,7 +1,7 @@
 {% extends "_base.html" %}
 {% block content %}
   <h1>UK Train Journey Planner</h1>
-  <p class="sub">Enter two stations by name or CRS code, a date, and a time to see everything departing in the next hour — direct trains and journeys with one change.</p>
+  <p class="sub">Enter two stations by name or CRS code, a date, and a time to see everything departing in your chosen window — direct trains and journeys with one change.</p>
   <div class="card">
     <form id="search-form" action="/results" method="get">
       <div class="row">
@@ -24,6 +24,24 @@
         <div class="field">
           <label for="time">Time</label>
           <input id="time" name="time" type="time" step="900" value="{{ default_time }}" required>
+        </div>
+      </div>
+      <div class="row">
+        <div class="field">
+          <label id="trip-type-label">Trains</label>
+          <div class="radio-group" role="radiogroup" aria-labelledby="trip-type-label">
+            <label class="radio-option"><input type="radio" name="direct_only" value="false" checked> All trains</label>
+            <label class="radio-option"><input type="radio" name="direct_only" value="true"> Direct only</label>
+          </div>
+        </div>
+        <div class="field">
+          <label for="window_minutes">Search window</label>
+          <select id="window_minutes" name="window_minutes">
+            <option value="30" {{ "selected" if default_window_minutes == 30 else "" }}>Next 30 min</option>
+            <option value="60" {{ "selected" if default_window_minutes == 60 else "" }}>Next 60 min</option>
+            <option value="90" {{ "selected" if default_window_minutes == 90 else "" }}>Next 90 min</option>
+            <option value="120" {{ "selected" if default_window_minutes == 120 else "" }}>Next 120 min</option>
+          </select>
         </div>
       </div>
       <button type="submit">Find trains</button>
