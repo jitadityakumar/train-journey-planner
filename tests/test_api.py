@@ -5,6 +5,7 @@ import re
 
 import pytest
 
+from app import validation
 from app.main import _next_quarter_hour, format_duration
 
 
@@ -101,6 +102,80 @@ def test_api_direct_date_out_of_range_returns_400(client):
     )
     assert r.status_code == 400
     assert "outside the loaded feed's coverage" in r.json()["detail"]
+
+
+def test_is_in_past_boundary_cases():
+    now = dt.datetime(2026, 8, 17, 9, 0, 0, tzinfo=validation.LONDON_TZ)
+    # A request for exactly "now" is not (yet) past.
+    assert validation.is_in_past(dt.date(2026, 8, 17), dt.time(9, 0, 0), now=now) is False
+    # One second in the future is not past; one second in the past is.
+    assert validation.is_in_past(dt.date(2026, 8, 17), dt.time(9, 0, 1), now=now) is False
+    assert validation.is_in_past(dt.date(2026, 8, 17), dt.time(8, 59, 59), now=now) is True
+
+
+def test_api_direct_future_query_is_not_past(client):
+    r = client.get(
+        "/api/direct",
+        params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    assert r.json()["is_past"] is False
+
+
+def test_api_direct_past_date_within_feed_range_returns_results_flagged_past(client):
+    # 2026-06-01 is before "now" (the fixture's clock in these tests is real
+    # wall-clock time, well past this date) but still inside the checked-in
+    # fixture's calendar coverage (2026-05-17 onward) — past searches must be
+    # served, not rejected, with is_past=True to flag them.
+    r = client.get(
+        "/api/direct",
+        params={"from": "BNS", "to": "WAT", "date": "2026-06-01", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["is_past"] is True
+    assert body["trips"], "a past date within the feed's range should still return real trips"
+
+
+def test_api_journeys_past_date_within_feed_range_returns_results_flagged_past(client):
+    r = client.get(
+        "/api/journeys",
+        params={"from": "BNS", "to": "WAT", "date": "2026-06-01", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["is_past"] is True
+    assert body["journeys"]
+
+
+def test_api_direct_date_before_feed_start_still_returns_400(client):
+    # Before the feed's own coverage entirely (not just "in the past") must
+    # still be rejected — only DateOutOfRangeError, not PastTimeError.
+    r = client.get(
+        "/api/direct",
+        params={"from": "BNS", "to": "WAT", "date": "2020-01-01", "time": "09:00"},
+    )
+    assert r.status_code == 400
+    assert "outside the loaded feed's coverage" in r.json()["detail"]
+
+
+def test_results_page_shows_past_badge_for_past_date(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "WAT", "date": "2026-06-01", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    assert 'class="badge badge-past"' in r.text
+    assert "Past" in r.text
+
+
+def test_results_page_omits_past_badge_for_future_date(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    assert 'class="badge badge-past"' not in r.text
 
 
 def test_api_direct_malformed_date_returns_422(client):

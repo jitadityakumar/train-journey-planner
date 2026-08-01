@@ -55,6 +55,7 @@ class DirectJourneyResponse(BaseModel):
     date: str
     window_start: str
     window_minutes: int
+    is_past: bool
     trips: list[DirectTripOut]
 
 
@@ -65,6 +66,7 @@ class JourneysResponse(BaseModel):
     window_start: str
     window_minutes: int
     direct_only: bool
+    is_past: bool
     journeys: list[JourneyOut]
 
 

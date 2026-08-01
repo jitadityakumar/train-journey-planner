@@ -119,8 +119,6 @@ def _validate_or_400(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except queries.DateOutOfRangeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except validation.PastTimeError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _direct_trip_out(t: queries.DirectTrip) -> DirectTripOut:
@@ -163,6 +161,7 @@ def _run_direct_query(
         date=date.isoformat(),
         window_start=time.isoformat(timespec="minutes"),
         window_minutes=window_minutes,
+        is_past=validation.is_in_past(date, time),
         trips=[_direct_trip_out(t) for t in trips],
     )
 
@@ -213,6 +212,7 @@ def _run_journeys_query(
         window_start=time.isoformat(timespec="minutes"),
         window_minutes=window_minutes,
         direct_only=direct_only,
+        is_past=validation.is_in_past(date, time),
         journeys=journey_outs,
     )
 

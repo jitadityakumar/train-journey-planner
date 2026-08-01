@@ -14,26 +14,18 @@ from app import queries
 LONDON_TZ = ZoneInfo("Europe/London")
 
 
-class PastTimeError(ValueError):
-    def __init__(self, requested: dt.datetime, now: dt.datetime):
-        self.requested = requested
-        self.now = now
-        super().__init__("requested time is in the past")
-
-
 def validate_query(
     conn: sqlite3.Connection,
     from_crs: str,
     to_crs: str,
     date: dt.date,
     time: dt.time,
-    *,
-    now: dt.datetime | None = None,
 ) -> tuple[queries.Stop, queries.Stop]:
     """Runs all Phase 1 validation and returns the resolved (origin, destination) stops.
 
-    Raises UnknownStationError, SameStationError, DateOutOfRangeError, or
-    PastTimeError.
+    Raises UnknownStationError, SameStationError, or DateOutOfRangeError.
+    Past dates/times are allowed as long as they fall within the loaded
+    feed's coverage — see `is_in_past` for flagging them to callers.
     """
     origin = queries.get_station(conn, from_crs)
     destination = queries.get_station(conn, to_crs)
@@ -41,9 +33,12 @@ def validate_query(
         raise queries.SameStationError(origin.stop_code)
     queries.validate_date_in_range(conn, date)
 
-    now = now or dt.datetime.now(LONDON_TZ)
-    if date == now.date() and time < now.time():
-        requested = dt.datetime.combine(date, time)
-        raise PastTimeError(requested, now)
-
     return origin, destination
+
+
+def is_in_past(date: dt.date, time: dt.time, *, now: dt.datetime | None = None) -> bool:
+    """True if the requested date/time is already behind the current
+    Europe/London wall-clock time — used to flag (not reject) past
+    searches, since the feed's coverage can genuinely include past dates."""
+    now = now or dt.datetime.now(LONDON_TZ)
+    return dt.datetime.combine(date, time, tzinfo=LONDON_TZ) < now
