@@ -121,10 +121,11 @@ def _validate_or_400(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _direct_trip_out(t: queries.DirectTrip) -> DirectTripOut:
+def _direct_trip_out(t: queries.DirectTrip, query_date: dt.date) -> DirectTripOut:
     return DirectTripOut(
         trip_id=t.trip_id,
         operator=t.agency_name,
+        operator_code=t.agency_id,
         route_description=t.route_short_name or t.route_long_name,
         headsign=t.trip_headsign,
         departure_time=t.departure_time,
@@ -132,6 +133,7 @@ def _direct_trip_out(t: queries.DirectTrip) -> DirectTripOut:
         departure_next_day=t.departure_next_day,
         arrival_next_day=t.arrival_next_day,
         duration_minutes=t.duration_minutes,
+        is_past=validation.trip_is_in_past(query_date, t.departure_time, t.departure_next_day),
         intermediate_stops=[
             IntermediateStopOut(
                 stop_name=s.stop_name,
@@ -161,8 +163,7 @@ def _run_direct_query(
         date=date.isoformat(),
         window_start=time.isoformat(timespec="minutes"),
         window_minutes=window_minutes,
-        is_past=validation.is_in_past(date, time),
-        trips=[_direct_trip_out(t) for t in trips],
+        trips=[_direct_trip_out(t, date) for t in trips],
     )
 
 
@@ -183,8 +184,8 @@ def _run_journeys_query(
         interchange_out = None
         if j.interchange is not None:
             interchange_out = InterchangeTripOut(
-                leg1=_direct_trip_out(j.interchange.leg1),
-                leg2=_direct_trip_out(j.interchange.leg2),
+                leg1=_direct_trip_out(j.interchange.leg1, date),
+                leg2=_direct_trip_out(j.interchange.leg2, date),
                 interchange=StationOut(
                     crs_code=j.interchange.interchange.stop_code,
                     name=j.interchange.interchange.stop_name,
@@ -200,7 +201,8 @@ def _run_journeys_query(
                 arrival_time=j.arrival_time,
                 arrival_next_day=j.arrival_next_day,
                 duration_minutes=j.duration_minutes,
-                direct=_direct_trip_out(j.direct) if j.direct is not None else None,
+                is_past=validation.trip_is_in_past(date, j.departure_time, j.departure_next_day),
+                direct=_direct_trip_out(j.direct, date) if j.direct is not None else None,
                 interchange=interchange_out,
             )
         )
@@ -212,7 +214,6 @@ def _run_journeys_query(
         window_start=time.isoformat(timespec="minutes"),
         window_minutes=window_minutes,
         direct_only=direct_only,
-        is_past=validation.is_in_past(date, time),
         journeys=journey_outs,
     )
 

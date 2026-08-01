@@ -49,16 +49,18 @@ connection time (not real per-station data — see the planning docs' MCT sectio
 layover at 90 minutes.
 
 Each direct trip in API/UI output includes the real train operating company (`operator`,
-from GTFS `agency.txt`, e.g. "South Western Railway") alongside a `route_description` (e.g.
-"Alton - London Waterloo via Wimbledon"). Journey durations render as "1h6m" rather than a
-bare minute count.
+from GTFS `agency.txt`, e.g. "South Western Railway") plus its short code (`operator_code`,
+e.g. "SW") alongside a `route_description` (e.g. "Alton - London Waterloo via Wimbledon").
+Journey durations render as "1h6m" rather than a bare minute count.
 
 Searches for a date/time already in the past are allowed, not rejected — the loaded feed's
 own date range often starts before "today" (it's a rolling window, refreshed daily), so
-past searches return real scheduled results rather than an error. Both API responses include
-an `is_past` field so consumers can tell past results from upcoming ones; the web results
-page shows a red "Past" badge on each journey when it applies. Only dates outside the feed's
-actual coverage (before its start or after its end) return an error.
+past searches return real scheduled results rather than an error. Every trip/journey in the
+API response carries its own `is_past` field, computed from that specific trip's departure
+time — not one flag for the whole response — so a search window that straddles "now" can
+correctly show some results as past and others as upcoming; the web results page shows a red
+"Past" badge on each journey card when it applies. Only dates outside the feed's actual
+coverage (before its start or after its end) return an error.
 
 Interactive API docs: http://localhost:8000/docs
 

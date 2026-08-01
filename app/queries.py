@@ -103,6 +103,7 @@ class IntermediateStop:
 class DirectTrip:
     trip_id: str
     agency_name: str | None
+    agency_id: str | None
     route_short_name: str | None
     route_long_name: str | None
     trip_headsign: str | None
@@ -240,6 +241,7 @@ def find_direct_trips(
             DirectTrip(
                 trip_id=row["trip_id"],
                 agency_name=row["agency_name"] or None,
+                agency_id=row["agency_id"] or None,
                 route_short_name=row["route_short_name"] or None,
                 route_long_name=row["route_long_name"] or None,
                 trip_headsign=row["trip_headsign"] or None,
@@ -315,6 +317,7 @@ def find_interchange_trips(
         leg1 = DirectTrip(
             trip_id=row["trip_id"],
             agency_name=row["agency_name"] or None,
+            agency_id=row["agency_id"] or None,
             route_short_name=row["route_short_name"] or None,
             route_long_name=row["route_long_name"] or None,
             trip_headsign=row["trip_headsign"] or None,
@@ -557,7 +560,7 @@ def _query_leg1_candidates(
     sql = f"""
         SELECT
             t.trip_id, t.trip_headsign,
-            r.route_short_name, r.route_long_name, ag.agency_name,
+            r.route_short_name, r.route_long_name, ag.agency_name, ag.agency_id,
             a.stop_sequence AS origin_seq, a.departure_secs AS dep_secs,
             c.stop_id AS interchange_stop_id, c.stop_sequence AS interchange_seq,
             c.arrival_secs AS arr_secs,
@@ -628,6 +631,7 @@ def _rebase_next_day(trip: DirectTrip, *, departure_next_day: bool, arrival_next
     return DirectTrip(
         trip_id=trip.trip_id,
         agency_name=trip.agency_name,
+        agency_id=trip.agency_id,
         route_short_name=trip.route_short_name,
         route_long_name=trip.route_long_name,
         trip_headsign=trip.trip_headsign,
@@ -653,7 +657,7 @@ def _query_direct_trips(
     sql = f"""
         SELECT
             t.trip_id, t.trip_headsign,
-            r.route_short_name, r.route_long_name, ag.agency_name,
+            r.route_short_name, r.route_long_name, ag.agency_name, ag.agency_id,
             st1.stop_sequence AS origin_seq, st1.departure_secs AS dep_secs,
             st2.stop_sequence AS dest_seq, st2.arrival_secs AS arr_secs
         FROM trips t

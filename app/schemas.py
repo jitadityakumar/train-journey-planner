@@ -20,6 +20,7 @@ class IntermediateStopOut(BaseModel):
 class DirectTripOut(BaseModel):
     trip_id: str
     operator: str | None
+    operator_code: str | None
     route_description: str | None
     headsign: str | None
     departure_time: str
@@ -27,6 +28,7 @@ class DirectTripOut(BaseModel):
     departure_next_day: bool
     arrival_next_day: bool
     duration_minutes: int
+    is_past: bool
     intermediate_stops: list[IntermediateStopOut]
 
 
@@ -45,6 +47,7 @@ class JourneyOut(BaseModel):
     arrival_time: str
     arrival_next_day: bool
     duration_minutes: int
+    is_past: bool
     direct: DirectTripOut | None = None
     interchange: InterchangeTripOut | None = None
 
@@ -55,7 +58,6 @@ class DirectJourneyResponse(BaseModel):
     date: str
     window_start: str
     window_minutes: int
-    is_past: bool
     trips: list[DirectTripOut]
 
 
@@ -66,7 +68,6 @@ class JourneysResponse(BaseModel):
     window_start: str
     window_minutes: int
     direct_only: bool
-    is_past: bool
     journeys: list[JourneyOut]
 
 

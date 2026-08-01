@@ -61,12 +61,13 @@ def test_api_direct_golden_path(client):
     body = r.json()
     assert body["origin"]["crs_code"] == "BNS"
     assert body["destination"]["crs_code"] == "WAT"
-    assert body["is_past"] is False
     departures = {(t["departure_time"], t["arrival_time"]) for t in body["trips"]}
     assert ("09:06:00", "09:26:00") in departures
     assert ("09:35:00", "09:57:30") in departures
     fast_trip = next(t for t in body["trips"] if t["departure_time"] == "09:06:00")
     assert fast_trip["operator"] == "South Western Railway"
+    assert fast_trip["operator_code"] == "SW"
+    assert fast_trip["is_past"] is False
 
 
 def test_api_direct_unknown_station_returns_400(client):
@@ -119,8 +120,8 @@ def test_api_direct_past_date_within_feed_range_returns_results_flagged_past(cli
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["is_past"] is True
     assert body["trips"], "a past date within the feed's range should still return real trips"
+    assert all(t["is_past"] for t in body["trips"])
 
 
 def test_api_journeys_past_date_within_feed_range_returns_results_flagged_past(client):
@@ -130,8 +131,74 @@ def test_api_journeys_past_date_within_feed_range_returns_results_flagged_past(c
     )
     assert r.status_code == 200
     body = r.json()
-    assert body["is_past"] is True
     assert body["journeys"]
+    assert all(j["is_past"] for j in body["journeys"])
+
+
+def test_trip_is_in_past_boundary_cases():
+    now = dt.datetime(2026, 8, 17, 9, 0, 0, tzinfo=validation.LONDON_TZ)
+    # Departs exactly "now": not (yet) past.
+    assert validation.trip_is_in_past(dt.date(2026, 8, 17), "09:00:00", False, now=now) is False
+    # One second either side of "now".
+    assert validation.trip_is_in_past(dt.date(2026, 8, 17), "09:00:01", False, now=now) is False
+    assert validation.trip_is_in_past(dt.date(2026, 8, 17), "08:59:59", False, now=now) is True
+    # departure_next_day rolls the comparison onto the following calendar day.
+    assert validation.trip_is_in_past(dt.date(2026, 8, 17), "08:59:59", True, now=now) is False
+
+
+class _FrozenDatetime(dt.datetime):
+    """Subclassing (rather than a MagicMock) keeps `dt.datetime.combine`/
+    `dt.timedelta` arithmetic elsewhere in validation.py working normally —
+    only `now()` is overridden."""
+
+    _frozen: dt.datetime
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls._frozen.astimezone(tz) if tz else cls._frozen
+
+
+def test_api_direct_is_past_differs_within_a_single_straddled_window(client, monkeypatch):
+    # The golden-path BNS->WAT departures are 09:06:00 and 09:35:00 (see
+    # test_api_direct_golden_path). Freeze "now" at 09:20 — between the
+    # two — so a single 60-minute-window response must show one trip as
+    # past and the other as not, proving is_past is computed per trip
+    # rather than once for the whole search (the bug this change fixes).
+    _FrozenDatetime._frozen = dt.datetime(2026, 8, 17, 9, 20, 0, tzinfo=validation.LONDON_TZ)
+    monkeypatch.setattr(validation.dt, "datetime", _FrozenDatetime)
+
+    r = client.get(
+        "/api/direct",
+        params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00", "window_minutes": 60},
+    )
+    assert r.status_code == 200
+    by_departure = {t["departure_time"]: t["is_past"] for t in r.json()["trips"]}
+    assert by_departure["09:06:00"] is True
+    assert by_departure["09:35:00"] is False
+
+
+def test_api_journeys_interchange_is_past_tracks_leg1_not_leg2(client, monkeypatch):
+    # BNS->LRD's earliest interchange (see test_api_journeys_golden_interchange)
+    # has leg1 departing 09:26:30 and leg2 departing 09:42:00. Freeze "now" at
+    # 09:30 — after leg1 departs but before leg2 does — so the journey-level
+    # is_past must be True (tracking leg1, the journey's real start), not
+    # False (which is what it'd be if it were wrongly wired to leg2).
+    _FrozenDatetime._frozen = dt.datetime(2026, 8, 17, 9, 30, 0, tzinfo=validation.LONDON_TZ)
+    monkeypatch.setattr(validation.dt, "datetime", _FrozenDatetime)
+
+    r = client.get(
+        "/api/journeys",
+        params={"from": "BNS", "to": "LRD", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    match = next(
+        j
+        for j in r.json()["journeys"]
+        if j["kind"] == "interchange" and j["interchange"]["leg1"]["departure_time"] == "09:26:30"
+    )
+    assert match["interchange"]["leg1"]["is_past"] is True
+    assert match["interchange"]["leg2"]["is_past"] is False
+    assert match["is_past"] is True
 
 
 def test_results_page_shows_past_badge_for_past_date(client):

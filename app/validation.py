@@ -42,3 +42,14 @@ def is_in_past(date: dt.date, time: dt.time, *, now: dt.datetime | None = None) 
     searches, since the feed's coverage can genuinely include past dates."""
     now = now or dt.datetime.now(LONDON_TZ)
     return dt.datetime.combine(date, time, tzinfo=LONDON_TZ) < now
+
+
+def trip_is_in_past(
+    query_date: dt.date, departure_time: str, departure_next_day: bool, *, now: dt.datetime | None = None
+) -> bool:
+    """Same idea as `is_in_past`, but for one specific trip/journey's own
+    departure time rather than the search's window start — a search window
+    can straddle "now", so some results within it have already departed and
+    some haven't (see `is_past` on `DirectTripOut`/`JourneyOut`)."""
+    actual_date = query_date + dt.timedelta(days=1 if departure_next_day else 0)
+    return is_in_past(actual_date, dt.time.fromisoformat(departure_time), now=now)
