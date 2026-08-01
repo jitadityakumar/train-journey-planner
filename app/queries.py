@@ -375,23 +375,31 @@ def find_interchange_trips(
                 )
             )
 
-    # Keep only the best (shortest-connection) journey per (leg1, leg2,
-    # interchange stop) triple — genuine duplicates, which happen when a
-    # loop-line trip calls at the same interchange stop twice (found in
-    # code review, 2026-08-01). Deliberately keyed *with* the interchange
-    # stop, not just the trip pair: two trains that share several stops
-    # along a corridor (e.g. this app's own worked example, where the
-    # leg-2 train calls at both Clapham Junction and Waterloo before
-    # reaching the destination) genuinely offer different real choices —
-    # a shorter wait at a later station versus a longer wait at an earlier
-    # one — even when the overall arrival time ties, so those are kept as
-    # distinct results rather than collapsed to whichever has the shortest
-    # wait.
-    best_by_key: dict[tuple[str, str, str], InterchangeTrip] = {}
+    # Keep only one journey per (leg1, leg2) trip pair — when the same two
+    # physical trains cross paths at more than one shared stop (e.g. leg 1
+    # calls at both CLJ and VXH before terminating, and leg 2 also calls at
+    # both on its way out), every shared stop is a technically-valid
+    # interchange point, but they all produce the *same* overall journey:
+    # leg 1's trip fixes the departure time and leg 2's trip fixes the
+    # arrival time regardless of which shared stop you get off/on at, so
+    # departure, arrival, and total duration are guaranteed identical across
+    # all of them — there's no real choice being offered, just noise (found
+    # from a real user-reported case, 2026-08-01: BNS->LRD showed the same
+    # journey twice, once changing at CLJ and once at VXH). Keep whichever
+    # lets the rider change at the earliest possible station — the first
+    # point leg 1 reaches a stop leg 2 also calls at — rather than whichever
+    # happens to have the shortest wait, since a passenger has no reason to
+    # stay on leg 1 past the first valid opportunity to change onto leg 2.
+    # This also naturally covers a loop-line trip calling at the same
+    # interchange stop twice (found in code review, 2026-08-01): the first
+    # occurrence is definitionally the earliest opportunity to change.
+    best_by_key: dict[tuple[str, str], InterchangeTrip] = {}
     for candidate in candidates:
-        key = (candidate.leg1.trip_id, candidate.leg2.trip_id, candidate.interchange.stop_id)
+        key = (candidate.leg1.trip_id, candidate.leg2.trip_id)
         existing = best_by_key.get(key)
-        if existing is None or candidate.connection_minutes < existing.connection_minutes:
+        if existing is None or _absolute_seconds(
+            candidate.leg1.arrival_time, candidate.leg1.arrival_next_day
+        ) < _absolute_seconds(existing.leg1.arrival_time, existing.leg1.arrival_next_day):
             best_by_key[key] = candidate
 
     return list(best_by_key.values())

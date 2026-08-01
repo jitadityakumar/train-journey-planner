@@ -107,13 +107,16 @@ def test_interchange_allows_leg1_trips_that_also_reach_destination_directly(conn
     )
 
 
-def test_interchange_keeps_distinct_results_for_different_interchange_stops(conn):
-    """Regression test (2026-08-01): an earlier version of the dedupe step
-    keyed only on (leg1.trip_id, leg2.trip_id), which silently dropped the
-    documented CLJ worked example — the same two physical trains also cross
-    paths at Waterloo, and deduping without the interchange stop in the key
-    collapsed the CLJ result into the shorter-wait Waterloo one, even though
-    they're genuinely different stations a passenger could change at."""
+def test_interchange_keeps_only_the_earliest_interchange_stop_per_trip_pair(conn):
+    """Regression test (2026-08-01, real user-reported case): the same two
+    physical trains (leg1 09:06:00 BNS->WAT, leg2 ->10:32:30 LRD) cross paths
+    at three shared stops in this fixture — CLJ (leg1 arrives 09:14:00),
+    VXH (09:21:00), and WAT (09:26:00) — all producing the exact same
+    overall journey (same departure, same arrival, same duration), since
+    leg1's own departure and leg2's own arrival don't depend on which shared
+    stop you change at. Only CLJ, the earliest one leg1 reaches, should
+    survive — showing the same journey three times over (once per
+    interchange stop) is noise, not a real choice."""
     origin = queries.get_station(conn, "BNS")
     destination = queries.get_station(conn, "LRD")
     results = queries.find_interchange_trips(
@@ -124,8 +127,7 @@ def test_interchange_keeps_distinct_results_for_different_interchange_stops(conn
         for r in results
         if r.leg1.departure_time == "09:06:00" and r.leg2.arrival_time == "10:32:30"
     }
-    assert "CLJ" in stops_for_this_trip_pair
-    assert "WAT" in stops_for_this_trip_pair
+    assert stops_for_this_trip_pair == {"CLJ"}
 
 
 def test_interchange_excludes_same_trip_as_both_legs(conn):
