@@ -3,7 +3,7 @@
 {% macro leg(trip) %}
   <div class="leg-head">
     <span>{{ trip.departure_time[:5] }}{% if trip.departure_next_day %}<sup>+1</sup>{% endif %} &rarr; {{ trip.arrival_time[:5] }}{% if trip.arrival_next_day %}<sup>+1</sup>{% endif %}</span>
-    <span>{{ trip.duration_minutes }} min</span>
+    <span>{{ trip.duration_minutes|duration }}</span>
   </div>
   <div class="trip-meta">
     {% if trip.operator %}{{ trip.operator }}{% endif %}
@@ -49,7 +49,7 @@
               {{ j.interchange.connection_minutes }} min
             </div>
             {{ leg(j.interchange.leg2) }}
-            <div class="trip-total">{{ j.duration_minutes }} min total</div>
+            <div class="trip-total">{{ j.duration_minutes|duration }} total</div>
           </div>
         {% endif %}
       {% endfor %}

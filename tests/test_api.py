@@ -5,7 +5,23 @@ import re
 
 import pytest
 
-from app.main import _next_quarter_hour
+from app.main import _next_quarter_hour, format_duration
+
+
+@pytest.mark.parametrize(
+    "minutes,expected",
+    [
+        (0, "0m"),
+        (45, "45m"),
+        (59, "59m"),
+        (60, "1h"),
+        (66, "1h6m"),
+        (120, "2h"),
+        (125, "2h5m"),
+    ],
+)
+def test_format_duration(minutes, expected):
+    assert format_duration(minutes) == expected
 
 
 @pytest.mark.parametrize(
@@ -219,6 +235,16 @@ def test_results_page_renders_interchange_journey(client):
     assert r.status_code == 200
     assert "1 change" in r.text
     assert "Clapham Junction" in r.text
+
+
+def test_results_page_renders_durations_in_hours_and_minutes(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "LRD", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    assert "1h6m total" in r.text
+    assert "<span>8m</span>" in r.text
 
 
 def test_results_page_renders_validation_error(client):
