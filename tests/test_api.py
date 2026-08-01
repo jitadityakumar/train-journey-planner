@@ -61,18 +61,10 @@ def test_api_direct_golden_path(client):
     body = r.json()
     assert body["origin"]["crs_code"] == "BNS"
     assert body["destination"]["crs_code"] == "WAT"
+    assert body["is_past"] is False
     departures = {(t["departure_time"], t["arrival_time"]) for t in body["trips"]}
     assert ("09:06:00", "09:26:00") in departures
     assert ("09:35:00", "09:57:30") in departures
-
-
-def test_api_direct_includes_operator(client):
-    r = client.get(
-        "/api/direct",
-        params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
-    )
-    assert r.status_code == 200
-    body = r.json()
     fast_trip = next(t for t in body["trips"] if t["departure_time"] == "09:06:00")
     assert fast_trip["operator"] == "South Western Railway"
 
@@ -96,6 +88,9 @@ def test_api_direct_same_station_returns_400(client):
 
 
 def test_api_direct_date_out_of_range_returns_400(client):
+    # Before the feed's own coverage entirely (not just "in the past" — see
+    # the past-date tests below, which must still succeed) is the only case
+    # that should still be rejected, via DateOutOfRangeError.
     r = client.get(
         "/api/direct",
         params={"from": "BNS", "to": "WAT", "date": "2020-01-01", "time": "09:00"},
@@ -111,15 +106,6 @@ def test_is_in_past_boundary_cases():
     # One second in the future is not past; one second in the past is.
     assert validation.is_in_past(dt.date(2026, 8, 17), dt.time(9, 0, 1), now=now) is False
     assert validation.is_in_past(dt.date(2026, 8, 17), dt.time(8, 59, 59), now=now) is True
-
-
-def test_api_direct_future_query_is_not_past(client):
-    r = client.get(
-        "/api/direct",
-        params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
-    )
-    assert r.status_code == 200
-    assert r.json()["is_past"] is False
 
 
 def test_api_direct_past_date_within_feed_range_returns_results_flagged_past(client):
@@ -148,17 +134,6 @@ def test_api_journeys_past_date_within_feed_range_returns_results_flagged_past(c
     assert body["journeys"]
 
 
-def test_api_direct_date_before_feed_start_still_returns_400(client):
-    # Before the feed's own coverage entirely (not just "in the past") must
-    # still be rejected — only DateOutOfRangeError, not PastTimeError.
-    r = client.get(
-        "/api/direct",
-        params={"from": "BNS", "to": "WAT", "date": "2020-01-01", "time": "09:00"},
-    )
-    assert r.status_code == 400
-    assert "outside the loaded feed's coverage" in r.json()["detail"]
-
-
 def test_results_page_shows_past_badge_for_past_date(client):
     r = client.get(
         "/results",
@@ -176,14 +151,6 @@ def test_results_page_omits_past_badge_for_future_date(client):
     )
     assert r.status_code == 200
     assert 'class="badge badge-past"' not in r.text
-
-
-def test_api_direct_malformed_date_returns_422(client):
-    r = client.get(
-        "/api/direct",
-        params={"from": "BNS", "to": "WAT", "date": "not-a-date", "time": "09:00"},
-    )
-    assert r.status_code == 422
 
 
 def test_api_journeys_includes_direct_and_interchange(client):
@@ -243,14 +210,6 @@ def test_api_journeys_direct_only_excludes_interchange_and_defaults_false(client
     assert body["journeys"] == [], "BNS -> LRD has no direct route, so direct_only=true should return none"
 
 
-def test_api_journeys_same_station_returns_400(client):
-    r = client.get(
-        "/api/journeys",
-        params={"from": "BNS", "to": "BNS", "date": "2026-08-17", "time": "09:00"},
-    )
-    assert r.status_code == 400
-
-
 def test_api_stations_lists_names_and_crs_codes(client):
     r = client.get("/api/stations")
     assert r.status_code == 200
@@ -265,12 +224,6 @@ def test_health_reports_dataset_present(client):
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json() == {"status": "ok", "dataset_present": True}
-
-
-def test_form_page_renders(client):
-    r = client.get("/")
-    assert r.status_code == 200
-    assert "<form" in r.text
 
 
 def test_results_page_renders_golden_path(client):

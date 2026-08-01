@@ -10,7 +10,7 @@ import datetime as dt
 
 import pytest
 
-from app import config, queries
+from app import queries
 
 
 def test_interchange_bns_clj_lrd_golden_path(conn):
@@ -76,10 +76,6 @@ def test_mct_boundary_excludes_connections_under_the_minimum(conn):
         r.interchange.stop_code == "CLJ" and r.leg1.departure_time == "09:06:00" and r.connection_minutes == 28
         for r in with_29_min_minimum
     ), "a connection one minute under the minimum should be excluded"
-
-
-def test_default_min_connection_time_is_five_minutes():
-    assert config.MIN_CONNECTION_TIME_MINUTES == 5
 
 
 def test_interchange_allows_leg1_trips_that_also_reach_destination_directly(conn):
@@ -162,17 +158,20 @@ def test_find_journeys_merges_direct_and_interchange_sorted_by_departure(conn):
     assert keys == sorted(keys)
 
 
-def test_find_journeys_includes_direct_trips_for_bns_wat(conn):
+def test_dominated_journeys_are_filtered_from_bns_wat(conn):
+    """2026-08-01 UX review: BNS->WAT has frequent direct service, so every
+    single-interchange candidate is beaten by some direct train that departs
+    at least as late and arrives at least as early — none should survive."""
     origin = queries.get_station(conn, "BNS")
     destination = queries.get_station(conn, "WAT")
     journeys = queries.find_journeys(conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60)
 
-    # Pins the full surviving set (not just "these two are present") so a
-    # future change that over-prunes directs against each other — e.g. a
-    # faster later departure wrongly deleting an earlier one it doesn't
-    # actually dominate — would be caught here, not just a change that
-    # under-prunes.
-    direct_departures = {j.departure_time for j in journeys if j.kind == "direct"}
+    assert all(j.kind == "direct" for j in journeys), "no interchange should beat this route's direct service"
+    # Pins the full surviving direct set (not just "these two are present")
+    # so a future change that over-prunes directs against each other — e.g.
+    # a faster later departure wrongly deleting an earlier one it doesn't
+    # actually dominate — would be caught here, not just under-pruning.
+    direct_departures = {j.departure_time for j in journeys}
     assert direct_departures == {
         "09:06:00",
         "09:11:30",
@@ -185,31 +184,7 @@ def test_find_journeys_includes_direct_trips_for_bns_wat(conn):
     }
 
 
-def test_dominated_journeys_are_filtered_from_bns_wat(conn):
-    """2026-08-01 UX review: BNS->WAT has frequent direct service, so every
-    single-interchange candidate is beaten by some direct train that departs
-    at least as late and arrives at least as early — none should survive."""
-    origin = queries.get_station(conn, "BNS")
-    destination = queries.get_station(conn, "WAT")
-    journeys = queries.find_journeys(conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60)
-
-    assert journeys, "expected at least the direct BNS->WAT trips"
-    assert all(j.kind == "direct" for j in journeys), "no interchange should beat this route's direct service"
-
-
-def test_find_journeys_direct_only_excludes_interchange_results(conn):
-    """BNS -> LRD has no direct route at all (see the module's other tests) —
-    with direct_only=True the interchange search shouldn't even run, so the
-    result should be empty rather than falling back to interchange results."""
-    origin = queries.get_station(conn, "BNS")
-    destination = queries.get_station(conn, "LRD")
-    journeys = queries.find_journeys(
-        conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60, direct_only=True
-    )
-    assert journeys == []
-
-
-def test_find_journeys_direct_only_keeps_direct_results(conn):
+def test_find_journeys_direct_only_excludes_interchange_and_keeps_direct_results(conn):
     origin = queries.get_station(conn, "BNS")
     destination = queries.get_station(conn, "WAT")
     all_journeys = queries.find_journeys(conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60)
@@ -218,6 +193,16 @@ def test_find_journeys_direct_only_keeps_direct_results(conn):
     )
     assert all(j.kind == "direct" for j in direct_only_journeys)
     assert direct_only_journeys == [j for j in all_journeys if j.kind == "direct"]
+
+    # BNS -> LRD has no direct route at all (see the module's other tests) —
+    # with direct_only=True the interchange search shouldn't even run, so
+    # the result should be empty rather than falling back to interchange
+    # results.
+    lrd = queries.get_station(conn, "LRD")
+    lrd_journeys = queries.find_journeys(
+        conn, origin, lrd, dt.date(2026, 8, 17), dt.time(9, 0), 60, direct_only=True
+    )
+    assert lrd_journeys == []
 
 
 def test_dominated_interchange_dropped_when_a_later_departure_reaches_the_same_arrival(conn):

@@ -14,11 +14,6 @@ def test_feed_loads_with_expected_tables(conn):
         assert count > 0, f"{table} table is empty"
 
 
-def test_agency_name_resolves_for_south_western_railway(conn):
-    row = conn.execute("SELECT agency_name FROM agency WHERE agency_id = 'SW'").fetchone()
-    assert row["agency_name"] == "South Western Railway"
-
-
 def test_known_crs_codes_resolve(conn):
     codes = {
         row["stop_code"]

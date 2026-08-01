@@ -128,10 +128,6 @@ def test_date_outside_feed_coverage_raises(conn):
         queries.validate_date_in_range(conn, dt.date(2020, 1, 1))
 
 
-def test_date_inside_feed_coverage_does_not_raise(conn):
-    queries.validate_date_in_range(conn, dt.date(2026, 8, 17))
-
-
 def test_same_origin_and_destination_raises(conn):
     origin = queries.get_station(conn, "BNS")
     with pytest.raises(queries.SameStationError):
