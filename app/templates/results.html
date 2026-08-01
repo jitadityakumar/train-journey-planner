@@ -5,11 +5,11 @@
     <span>{{ trip.departure_time[:5] }}{% if trip.departure_next_day %}<sup>+1</sup>{% endif %} &rarr; {{ trip.arrival_time[:5] }}{% if trip.arrival_next_day %}<sup>+1</sup>{% endif %}</span>
     <span>{{ trip.duration_minutes|duration }}</span>
   </div>
-  {% if trip.agency_name %}
-    <div class="trip-operator">{{ trip.agency_name }}</div>
+  {% if trip.operator %}
+    <div class="trip-operator">{{ trip.operator }}</div>
   {% endif %}
   <div class="trip-meta">
-    {% if trip.operator %}{{ trip.operator }}{% endif %}
+    {% if trip.route_description %}{{ trip.route_description }}{% endif %}
     {% if trip.headsign %} &middot; towards {{ trip.headsign }}{% endif %}
   </div>
   {% if trip.intermediate_stops %}

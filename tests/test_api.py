@@ -65,7 +65,7 @@ def test_api_direct_golden_path(client):
     assert ("09:35:00", "09:57:30") in departures
 
 
-def test_api_direct_includes_agency_name(client):
+def test_api_direct_includes_operator(client):
     r = client.get(
         "/api/direct",
         params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
@@ -73,7 +73,7 @@ def test_api_direct_includes_agency_name(client):
     assert r.status_code == 200
     body = r.json()
     fast_trip = next(t for t in body["trips"] if t["departure_time"] == "09:06:00")
-    assert fast_trip["agency_name"] == "South Western Railway"
+    assert fast_trip["operator"] == "South Western Railway"
 
 
 def test_api_direct_unknown_station_returns_400(client):

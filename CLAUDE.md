@@ -125,8 +125,8 @@ class IntermediateStopOut:
 
 class DirectTripOut:
     trip_id: str
-    agency_name: str | None   # real train-operating company, e.g. "South Western Railway" (from GTFS agency.txt); None if unresolvable
-    operator: str | None      # route pattern description, e.g. "Alton - London Waterloo via Wimbledon" (route_short_name or route_long_name) — NOT the operator name despite the field name; kept for backwards compat
+    operator: str | None           # real train-operating company, e.g. "South Western Railway" (from GTFS agency.txt); None if unresolvable
+    route_description: str | None # route pattern description, e.g. "Alton - London Waterloo via Wimbledon" (route_short_name or route_long_name)
     headsign: str | None
     departure_time: str       # wall-clock "HH:MM:SS"
     arrival_time: str
@@ -170,10 +170,11 @@ class JourneysResponse:
     journeys: list[JourneyOut]
 ```
 
-`agency_name` vs `operator`: two separate fields exist for historical reasons — `operator`
-predates the GTFS `agency.txt` integration and is actually a route-pattern description, not
-an operator name (misleading field name, kept for backwards compatibility rather than
-removed). Prefer `agency_name` for the actual train operating company.
+`operator` (real train-operating company, from GTFS `agency.txt`) and `route_description`
+(route pattern text, e.g. "Alton - London Waterloo via Wimbledon") were renamed from
+`agency_name`/`operator` respectively on 2026-08-01 — the old names had it backwards
+(`operator` used to hold the route-pattern text, not the operator). This was a breaking
+change to `DirectTripOut`; no backwards-compat aliases were kept.
 
 ## Error responses
 
