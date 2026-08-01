@@ -103,6 +103,25 @@ def get_db():
         )
     conn = get_readonly_connection(config.GTFS_DB_PATH)
     try:
+        # Schema-version guard: a DB built before the reversal-continuation
+        # fix (issue #15) predates the synthesized_trips table every query
+        # now LEFT JOINs against — without this check, every request would
+        # 500 with a raw "no such table" sqlite error instead of a clear
+        # message, until the next scheduled refresh happens to rebuild it.
+        # Matches this project's existing precedent (see CLAUDE.md/context.md)
+        # of schema changes needing a manual DB rebuild on deploy — this
+        # just makes the failure mode legible instead of silent/opaque.
+        has_synthesized_trips = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'synthesized_trips'"
+        ).fetchone()
+        if has_synthesized_trips is None:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "GTFS dataset was built with an older schema — delete the gtfs.db file "
+                    "and restart to force a rebuild."
+                ),
+            )
         yield conn
     finally:
         conn.close()
@@ -143,6 +162,11 @@ def _direct_trip_out(t: queries.DirectTrip, query_date: dt.date) -> DirectTripOu
             )
             for s in t.intermediate_stops
         ],
+        reverses_at=(
+            StationOut(crs_code=t.reverses_at.stop_code, name=t.reverses_at.stop_name)
+            if t.reverses_at is not None
+            else None
+        ),
     )
 
 

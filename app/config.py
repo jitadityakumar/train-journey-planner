@@ -26,6 +26,22 @@ MIN_CONNECTION_TIME_MINUTES = 5
 # it's technically valid; see RESEARCH.md §3.
 MAX_CONNECTION_TIME_MINUTES = 90
 
+# Maximum vehicle dwell time (minutes) between a trip terminating at a
+# station and a different trip_id departing that same station for the two
+# to be treated as one physical train reversing direction (see
+# db._build_trip_continuations / GitHub issue #15 — branch-line reversals
+# like Tadworth->Purley->London Bridge). Deliberately a separate constant
+# from MIN/MAX_CONNECTION_TIME_MINUTES above: those model a *passenger*
+# changing trains, this models the same vehicle sitting at a terminus before
+# heading back out, which can be much quicker than any passenger transfer —
+# issue #15's confirmed Earlswood/Redhill case is a 4-minute dwell, already
+# below MIN_CONNECTION_TIME_MINUTES. Starting value, not yet empirically
+# swept against the full production feed (PLAN.md's review recommended
+# sweeping 5/10/15/20 and picking the point ambiguous-match count starts
+# climbing) — revisit if the live Darwin comparison surfaces false
+# positives/negatives.
+REVERSAL_MAX_DWELL_MINUTES = 10
+
 # Maps a station's primary, public-facing CRS code to other codes TravelWhiz's
 # GTFS conversion assigns to the *same physical station complex* — found via
 # GitHub issue #11 (2026-08-01): Paddington and Liverpool Street's Elizabeth

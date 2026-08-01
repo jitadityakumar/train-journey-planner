@@ -117,6 +117,12 @@ class DirectTrip:
     arrival_next_day: bool
     duration_minutes: int
     intermediate_stops: list[IntermediateStop] = field(default_factory=list)
+    # Set when this trip is a synthesized reversal-continuation (see
+    # db._build_trip_continuations / GitHub issue #15) and the requested
+    # journey genuinely spans both legs — the stop where the physical train
+    # terminates and reverses direction under a new trip_id, not an ordinary
+    # intermediate stop. None for every plain, single-trip_id result.
+    reverses_at: Stop | None = None
 
 
 @dataclass
@@ -208,6 +214,48 @@ def _alias_stop_ids(conn: sqlite3.Connection, stop: Stop) -> list[str]:
         if row is not None:
             ids.append(row["stop_id"])
     return ids
+
+
+def _constituent_trip_ids(conn: sqlite3.Connection, trip_id: str) -> frozenset[str]:
+    """The full set of real physical trip_ids `trip_id` represents — just
+    `{trip_id}` for an ordinary trip that's never part of a reversal, or the
+    complete "reversal family" of physical legs it belongs to (see
+    db._build_trip_continuations / GitHub issue #15). Used to detect "same
+    physical train" when comparing two trip_ids that might not be literally
+    equal but do share a leg.
+
+    Reversal-continuation synthesis is scoped to pairs only (no chained 3+
+    leg trips are synthesized as a single trip_id), but a physical trip can
+    still be *part of* more than one pair — e.g. C2 is leg2 of C1+C2 and
+    also leg1 of C2+C3 for a train that reverses twice. Walking the
+    synthesized_trips graph (by leg1_trip_id/leg2_trip_id, not just by
+    trip_id primary key) finds the full connected family in that case —
+    {C1, C2, C3} — rather than stopping at whichever single pair `trip_id`
+    happens to be a member or constituent of, which would otherwise let
+    e.g. C1+C2 (as leg1) and the plain trip C3 (as leg2) pass this "same
+    train" check even though C1-C2-C3 is one physical reversing train
+    (found in code review, 2026-08-01)."""
+    physical_ids: set[str] = set()
+    row = conn.execute(
+        "SELECT leg1_trip_id, leg2_trip_id FROM synthesized_trips WHERE trip_id = ?",
+        (trip_id,),
+    ).fetchone()
+    frontier = {row["leg1_trip_id"], row["leg2_trip_id"]} if row is not None else {trip_id}
+
+    while frontier:
+        current = frontier.pop()
+        if current in physical_ids:
+            continue
+        physical_ids.add(current)
+        for pair in conn.execute(
+            "SELECT leg1_trip_id, leg2_trip_id FROM synthesized_trips "
+            "WHERE leg1_trip_id = ? OR leg2_trip_id = ?",
+            (current, current),
+        ).fetchall():
+            frontier.add(pair["leg1_trip_id"])
+            frontier.add(pair["leg2_trip_id"])
+
+    return frozenset(physical_ids)
 
 
 def _in_clause(prefix: str, values: list[str]) -> tuple[str, dict[str, str]]:
@@ -341,6 +389,15 @@ def find_direct_trips(
                 arrival_next_day=arr_dt.date() > date,
                 duration_minutes=duration_minutes,
                 intermediate_stops=intermediate,
+                reverses_at=(
+                    Stop(
+                        stop_id=row["reversal_stop_id"],
+                        stop_code=row["reversal_stop_code"],
+                        stop_name=row["reversal_stop_name"],
+                    )
+                    if row["reversal_stop_id"] is not None
+                    else None
+                ),
             )
         )
     return results
@@ -402,6 +459,19 @@ def find_interchange_trips(
         )
         leg1_rows.extend((row, bucket_date) for row in bucket_rows)
 
+    # _constituent_trip_ids does a small BFS query against synthesized_trips
+    # — cheap once, but this loop calls it for the same leg1/leg2 trip_id
+    # combination many times over (once per leg1 row x leg2 candidate), so
+    # memoize rather than repeat the lookup on every iteration.
+    constituent_cache: dict[str, frozenset[str]] = {}
+
+    def constituents(trip_id: str) -> frozenset[str]:
+        cached = constituent_cache.get(trip_id)
+        if cached is None:
+            cached = _constituent_trip_ids(conn, trip_id)
+            constituent_cache[trip_id] = cached
+        return cached
+
     candidates: list[InterchangeTrip] = []
     for row, bucket_date in leg1_rows:
         leg1_departure_dt = _absolute_datetime(bucket_date, row["dep_secs"])
@@ -420,6 +490,15 @@ def find_interchange_trips(
             arrival_next_day=arrival_dt.date() > date,
             duration_minutes=round((row["arr_secs"] - row["dep_secs"]) / 60),
             intermediate_stops=_intermediate_stops(conn, row["trip_id"], row["origin_seq"], row["interchange_seq"]),
+            reverses_at=(
+                Stop(
+                    stop_id=row["reversal_stop_id"],
+                    stop_code=row["reversal_stop_code"],
+                    stop_name=row["reversal_stop_name"],
+                )
+                if row["reversal_stop_id"] is not None
+                else None
+            ),
         )
         interchange_stop = Stop(
             stop_id=row["interchange_stop_id"],
@@ -438,11 +517,18 @@ def find_interchange_trips(
             leg2_window_minutes,
         )
 
+        leg1_constituents = constituents(leg1.trip_id)
         for leg2 in leg2_candidates:
-            if leg2.trip_id == leg1.trip_id:
+            if leg1_constituents & constituents(leg2.trip_id):
                 # Same physical trip re-appearing at the interchange stop
                 # (a loop-line service can call at one station twice — see
-                # RESEARCH.md's Data Validation section) isn't a real change.
+                # RESEARCH.md's Data Validation section) isn't a real
+                # change. Comparing constituent trip_ids rather than raw
+                # trip_id equality also catches the case where either leg
+                # is a synthesized reversal-continuation trip (see issue
+                # #15) that embeds the other leg's actual physical train —
+                # a plain `==` check would miss that and offer the same
+                # physical train as a fake "interchange".
                 continue
 
             # Rebase leg 2's next-day flags onto the *original* query date —
@@ -666,17 +752,46 @@ def _query_leg1_candidates(
             a.stop_sequence AS origin_seq, a.departure_secs AS dep_secs,
             c.stop_id AS interchange_stop_id, c.stop_sequence AS interchange_seq,
             c.arrival_secs AS arr_secs,
-            cs.stop_code AS interchange_stop_code, cs.stop_name AS interchange_stop_name
+            cs.stop_code AS interchange_stop_code, cs.stop_name AS interchange_stop_name,
+            syn.reversal_stop_id AS reversal_stop_id,
+            rs.stop_code AS reversal_stop_code, rs.stop_name AS reversal_stop_name
         FROM trips t
         JOIN stop_times a ON a.trip_id = t.trip_id AND a.stop_id IN {origin_clause}
         JOIN stop_times c ON c.trip_id = t.trip_id AND c.stop_sequence > a.stop_sequence
         JOIN stops cs ON cs.stop_id = c.stop_id
         JOIN routes r ON r.route_id = t.route_id
         LEFT JOIN agency ag ON ag.agency_id = r.agency_id
+        LEFT JOIN synthesized_trips syn ON syn.trip_id = t.trip_id
+        LEFT JOIN stops rs ON rs.stop_id = syn.reversal_stop_id
         WHERE a.departure_secs >= :lo AND a.departure_secs < :hi
           AND c.stop_id NOT IN {dest_clause}
           AND c.stop_id NOT IN {origin_clause}
           AND t.service_id IN ({active_sql})
+          -- Same duplicate-suppression as _query_direct_trips above: a
+          -- synthesized reversal-continuation trip also contains both of
+          -- its constituent legs' stops individually, so without this an
+          -- interchange candidate wholly inside one leg would duplicate
+          -- what searching that leg's own plain trip_id already finds.
+          AND (
+            syn.trip_id IS NULL
+            OR (
+              a.stop_sequence < syn.reversal_seq AND c.stop_sequence > syn.reversal_seq
+              -- Same retracing-route protection as _query_direct_trips
+              -- above — require the closest matching origin/candidate pair,
+              -- not a later re-visit of either stop (found in code review,
+              -- 2026-08-01).
+              AND NOT EXISTS (
+                SELECT 1 FROM stop_times dup_o
+                WHERE dup_o.trip_id = t.trip_id AND dup_o.stop_id = a.stop_id
+                  AND dup_o.stop_sequence > a.stop_sequence AND dup_o.stop_sequence < c.stop_sequence
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM stop_times dup_c
+                WHERE dup_c.trip_id = t.trip_id AND dup_c.stop_id = c.stop_id
+                  AND dup_c.stop_sequence > a.stop_sequence AND dup_c.stop_sequence < c.stop_sequence
+              )
+            )
+          )
     """
     params = {
         **origin_params,
@@ -743,6 +858,7 @@ def _rebase_next_day(trip: DirectTrip, *, departure_next_day: bool, arrival_next
         arrival_next_day=arrival_next_day,
         duration_minutes=trip.duration_minutes,
         intermediate_stops=trip.intermediate_stops,
+        reverses_at=trip.reverses_at,
     )
 
 
@@ -763,15 +879,54 @@ def _query_direct_trips(
             t.trip_id, t.trip_headsign,
             r.route_short_name, r.route_long_name, ag.agency_name, ag.agency_id,
             st1.stop_sequence AS origin_seq, st1.departure_secs AS dep_secs,
-            st2.stop_sequence AS dest_seq, st2.arrival_secs AS arr_secs
+            st2.stop_sequence AS dest_seq, st2.arrival_secs AS arr_secs,
+            syn.reversal_stop_id AS reversal_stop_id,
+            rs.stop_code AS reversal_stop_code, rs.stop_name AS reversal_stop_name
         FROM trips t
         JOIN stop_times st1 ON st1.trip_id = t.trip_id AND st1.stop_id IN {origin_clause}
         JOIN stop_times st2 ON st2.trip_id = t.trip_id AND st2.stop_id IN {dest_clause}
         JOIN routes r ON r.route_id = t.route_id
         LEFT JOIN agency ag ON ag.agency_id = r.agency_id
+        LEFT JOIN synthesized_trips syn ON syn.trip_id = t.trip_id
+        LEFT JOIN stops rs ON rs.stop_id = syn.reversal_stop_id
         WHERE st1.stop_sequence < st2.stop_sequence
           AND st1.departure_secs >= :lo AND st1.departure_secs < :hi
           AND t.service_id IN ({active_sql})
+          -- A synthesized reversal-continuation trip (see
+          -- db._build_trip_continuations / issue #15) also contains every
+          -- stop of its two constituent legs individually — without this,
+          -- a query that lies entirely within one leg would match both the
+          -- plain constituent trip and this synthesized copy of it,
+          -- showing the same physical train twice. Only keep a synthesized
+          -- match when the journey genuinely straddles the reversal point.
+          AND (
+            syn.trip_id IS NULL
+            OR (
+              st1.stop_sequence < syn.reversal_seq AND st2.stop_sequence > syn.reversal_seq
+              -- A reversal that retraces its own route (e.g. A -> B ->
+              -- terminus -> reverses -> back through B -> Z) makes the
+              -- origin and/or destination stop_id appear more than once in
+              -- the synthesized trip. Without these, a plain A -> B query
+              -- would additionally match the *later*, post-reversal
+              -- occurrence of B — a real but nonsensical "ride past B,
+              -- reverse, come back to B" answer nobody would want when the
+              -- plain, un-synthesized trip already gets there directly.
+              -- Require the chosen origin/destination pair to be the
+              -- closest one to each other (no other matching-stop row of
+              -- either lies strictly between them) — found in code review,
+              -- 2026-08-01.
+              AND NOT EXISTS (
+                SELECT 1 FROM stop_times dup_o
+                WHERE dup_o.trip_id = t.trip_id AND dup_o.stop_id = st1.stop_id
+                  AND dup_o.stop_sequence > st1.stop_sequence AND dup_o.stop_sequence < st2.stop_sequence
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM stop_times dup_d
+                WHERE dup_d.trip_id = t.trip_id AND dup_d.stop_id = st2.stop_id
+                  AND dup_d.stop_sequence > st1.stop_sequence AND dup_d.stop_sequence < st2.stop_sequence
+              )
+            )
+          )
     """
     params = {
         **origin_params,
