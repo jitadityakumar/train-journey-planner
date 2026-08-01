@@ -102,6 +102,7 @@ class IntermediateStop:
 @dataclass
 class DirectTrip:
     trip_id: str
+    agency_name: str | None
     route_short_name: str | None
     route_long_name: str | None
     trip_headsign: str | None
@@ -238,6 +239,7 @@ def find_direct_trips(
         results.append(
             DirectTrip(
                 trip_id=row["trip_id"],
+                agency_name=row["agency_name"] or None,
                 route_short_name=row["route_short_name"] or None,
                 route_long_name=row["route_long_name"] or None,
                 trip_headsign=row["trip_headsign"] or None,
@@ -312,6 +314,7 @@ def find_interchange_trips(
 
         leg1 = DirectTrip(
             trip_id=row["trip_id"],
+            agency_name=row["agency_name"] or None,
             route_short_name=row["route_short_name"] or None,
             route_long_name=row["route_long_name"] or None,
             trip_headsign=row["trip_headsign"] or None,
@@ -554,7 +557,7 @@ def _query_leg1_candidates(
     sql = f"""
         SELECT
             t.trip_id, t.trip_headsign,
-            r.route_short_name, r.route_long_name,
+            r.route_short_name, r.route_long_name, ag.agency_name,
             a.stop_sequence AS origin_seq, a.departure_secs AS dep_secs,
             c.stop_id AS interchange_stop_id, c.stop_sequence AS interchange_seq,
             c.arrival_secs AS arr_secs,
@@ -564,6 +567,7 @@ def _query_leg1_candidates(
         JOIN stop_times c ON c.trip_id = t.trip_id AND c.stop_sequence > a.stop_sequence
         JOIN stops cs ON cs.stop_id = c.stop_id
         JOIN routes r ON r.route_id = t.route_id
+        LEFT JOIN agency ag ON ag.agency_id = r.agency_id
         WHERE a.departure_secs >= :lo AND a.departure_secs < :hi
           AND c.stop_id != :destination_id
           AND c.stop_id != :origin_id
@@ -623,6 +627,7 @@ def _rebase_next_day(trip: DirectTrip, *, departure_next_day: bool, arrival_next
     its own anchor date) onto the caller's original query date."""
     return DirectTrip(
         trip_id=trip.trip_id,
+        agency_name=trip.agency_name,
         route_short_name=trip.route_short_name,
         route_long_name=trip.route_long_name,
         trip_headsign=trip.trip_headsign,
@@ -648,13 +653,14 @@ def _query_direct_trips(
     sql = f"""
         SELECT
             t.trip_id, t.trip_headsign,
-            r.route_short_name, r.route_long_name,
+            r.route_short_name, r.route_long_name, ag.agency_name,
             st1.stop_sequence AS origin_seq, st1.departure_secs AS dep_secs,
             st2.stop_sequence AS dest_seq, st2.arrival_secs AS arr_secs
         FROM trips t
         JOIN stop_times st1 ON st1.trip_id = t.trip_id AND st1.stop_id = :origin_id
         JOIN stop_times st2 ON st2.trip_id = t.trip_id AND st2.stop_id = :destination_id
         JOIN routes r ON r.route_id = t.route_id
+        LEFT JOIN agency ag ON ag.agency_id = r.agency_id
         WHERE st1.stop_sequence < st2.stop_sequence
           AND st1.departure_secs >= :lo AND st1.departure_secs < :hi
           AND t.service_id IN ({active_sql})

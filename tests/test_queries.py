@@ -40,6 +40,16 @@ def test_direct_trip_includes_ordered_intermediate_stops(conn):
     assert stop_codes == ["PUT", "WNT", "CLJ", "QRB", "VXH"]
 
 
+def test_direct_trip_includes_agency_name(conn):
+    origin = queries.get_station(conn, "BNS")
+    destination = queries.get_station(conn, "WAT")
+    trips = queries.find_direct_trips(
+        conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60
+    )
+    fast_trip = next(t for t in trips if t.departure_time == "09:06:00")
+    assert fast_trip.agency_name == "South Western Railway"
+
+
 def test_window_excludes_departures_outside_range(conn):
     origin = queries.get_station(conn, "BNS")
     destination = queries.get_station(conn, "WAT")

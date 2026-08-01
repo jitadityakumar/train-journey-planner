@@ -38,10 +38,12 @@ ROUTES = pd.DataFrame(
         for i in range(1, 4)
     ]
 )
+AGENCY = pd.DataFrame([{"agency_id": "TT", "agency_name": "Test Trains"}])
 
 
 def _write_feed(gtfs_dir: Path, trips, stop_times, calendar):
     STOPS.to_csv(gtfs_dir / "stops.txt", index=False)
+    AGENCY.to_csv(gtfs_dir / "agency.txt", index=False)
     ROUTES.to_csv(gtfs_dir / "routes.txt", index=False)
     pd.DataFrame(trips).to_csv(gtfs_dir / "trips.txt", index=False)
     pd.DataFrame(stop_times).to_csv(gtfs_dir / "stop_times.txt", index=False)

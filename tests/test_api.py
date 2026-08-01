@@ -65,6 +65,17 @@ def test_api_direct_golden_path(client):
     assert ("09:35:00", "09:57:30") in departures
 
 
+def test_api_direct_includes_agency_name(client):
+    r = client.get(
+        "/api/direct",
+        params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    fast_trip = next(t for t in body["trips"] if t["departure_time"] == "09:06:00")
+    assert fast_trip["agency_name"] == "South Western Railway"
+
+
 def test_api_direct_unknown_station_returns_400(client):
     r = client.get(
         "/api/direct",
@@ -195,6 +206,33 @@ def test_results_page_renders_golden_path(client):
     assert r.status_code == 200
     assert "09:06" in r.text
     assert "09:35" in r.text
+
+
+def test_results_page_heading_shows_full_station_names(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    assert "Barnes (BNS) to London Waterloo (WAT)" in r.text
+
+
+def test_results_page_heading_falls_back_to_codes_on_error(client):
+    r = client.get(
+        "/results",
+        params={"from_": "ZZZ", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    assert "ZZZ to WAT" in r.text
+
+
+def test_results_page_shows_operator_name_above_route_description(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 200
+    assert '<div class="trip-operator">South Western Railway</div>' in r.text
 
 
 def test_results_page_summary_shows_window_as_time_range(client):
