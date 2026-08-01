@@ -404,13 +404,23 @@ def find_journeys(
     date: dt.date,
     window_start: dt.time,
     window_minutes: int,
+    direct_only: bool = False,
 ) -> list[Journey]:
     """Direct and single-interchange journeys, merged and Pareto-filtered
     (see `_drop_dominated_journeys` — drops journeys no rider has a reason
     to prefer over some other candidate in the set), then ranked by
-    departure time (then duration) — see RESEARCH.md §3's ranking rule."""
+    departure time (then duration) — see RESEARCH.md §3's ranking rule.
+
+    `direct_only=True` skips the interchange search entirely (not just
+    filtering interchange results back out afterward) — also avoids the
+    per-leg1-candidate leg2 queries in find_interchange_trips, which are the
+    most expensive part of this function."""
     direct_trips = find_direct_trips(conn, origin, destination, date, window_start, window_minutes)
-    interchange_trips = find_interchange_trips(conn, origin, destination, date, window_start, window_minutes)
+    interchange_trips = (
+        []
+        if direct_only
+        else find_interchange_trips(conn, origin, destination, date, window_start, window_minutes)
+    )
 
     journeys = [
         Journey(

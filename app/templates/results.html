@@ -30,7 +30,7 @@
   {% elif result %}
     <p class="journey-summary">
       {{ result.journeys|length }} journey{{ "" if result.journeys|length == 1 else "s" }}
-      on {{ date }}, {{ time }} to {{ window_end_time }}{% if window_end_next_day %}<sup>+1</sup>{% endif %}.
+      on {{ date }}, {{ time }} to {{ window_end_time }}{% if window_end_next_day %}<sup>+1</sup>{% endif %}{% if direct_only %} (direct trains only){% endif %}.
     </p>
 
     {% if result.journeys %}
@@ -54,7 +54,9 @@
         {% endif %}
       {% endfor %}
     {% else %}
-      <div class="no-results">No direct or single-change trains found in this window.</div>
+      <div class="no-results">
+        {% if direct_only %}No direct trains found in this window.{% else %}No direct or single-change trains found in this window.{% endif %}
+      </div>
     {% endif %}
   {% endif %}
 {% endblock %}

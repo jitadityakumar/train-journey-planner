@@ -124,6 +124,23 @@ def test_api_journeys_golden_interchange(client):
     ), "09:06:00's change is dominated by 09:11:30's identical-arrival connection and should be filtered out"
 
 
+def test_api_journeys_direct_only_excludes_interchange_and_defaults_false(client):
+    r = client.get(
+        "/api/journeys",
+        params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.json()["direct_only"] is False
+
+    r = client.get(
+        "/api/journeys",
+        params={"from": "BNS", "to": "LRD", "date": "2026-08-17", "time": "09:00", "direct_only": "true"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["direct_only"] is True
+    assert body["journeys"] == [], "BNS -> LRD has no direct route, so direct_only=true should return none"
+
+
 def test_api_journeys_same_station_returns_400(client):
     r = client.get(
         "/api/journeys",
@@ -182,6 +199,16 @@ def test_results_page_summary_marks_next_day_when_window_crosses_midnight(client
     assert r.status_code == 200
     assert "23:30 to 00:30" in r.text
     assert "<sup>+1</sup>" in r.text
+
+
+def test_results_page_direct_only_shows_no_results_message_for_interchange_only_route(client):
+    r = client.get(
+        "/results",
+        params={"from_": "BNS", "to": "LRD", "date": "2026-08-17", "time": "09:00", "direct_only": "true"},
+    )
+    assert r.status_code == 200
+    assert "(direct trains only)" in r.text
+    assert "No direct trains found in this window." in r.text
 
 
 def test_results_page_renders_interchange_journey(client):

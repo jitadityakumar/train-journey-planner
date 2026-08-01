@@ -63,6 +63,7 @@ class JourneysResponse(BaseModel):
     date: str
     window_start: str
     window_minutes: int
+    direct_only: bool
     journeys: list[JourneyOut]
 
 

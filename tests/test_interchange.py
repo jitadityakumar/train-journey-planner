@@ -195,6 +195,29 @@ def test_dominated_journeys_are_filtered_from_bns_wat(conn):
     assert all(j.kind == "direct" for j in journeys), "no interchange should beat this route's direct service"
 
 
+def test_find_journeys_direct_only_excludes_interchange_results(conn):
+    """BNS -> LRD has no direct route at all (see the module's other tests) —
+    with direct_only=True the interchange search shouldn't even run, so the
+    result should be empty rather than falling back to interchange results."""
+    origin = queries.get_station(conn, "BNS")
+    destination = queries.get_station(conn, "LRD")
+    journeys = queries.find_journeys(
+        conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60, direct_only=True
+    )
+    assert journeys == []
+
+
+def test_find_journeys_direct_only_keeps_direct_results(conn):
+    origin = queries.get_station(conn, "BNS")
+    destination = queries.get_station(conn, "WAT")
+    all_journeys = queries.find_journeys(conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60)
+    direct_only_journeys = queries.find_journeys(
+        conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60, direct_only=True
+    )
+    assert all(j.kind == "direct" for j in direct_only_journeys)
+    assert direct_only_journeys == [j for j in all_journeys if j.kind == "direct"]
+
+
 def test_dominated_interchange_dropped_when_a_later_departure_reaches_the_same_arrival(conn):
     """The 09:06:00 CLJ change used to be the documented worked example, but
     it's dominated: 09:11:30 reaches the same interchange, on the same
