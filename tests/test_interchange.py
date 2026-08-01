@@ -165,6 +165,131 @@ def test_find_journeys_includes_direct_trips_for_bns_wat(conn):
     destination = queries.get_station(conn, "WAT")
     journeys = queries.find_journeys(conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60)
 
+    # Pins the full surviving set (not just "these two are present") so a
+    # future change that over-prunes directs against each other — e.g. a
+    # faster later departure wrongly deleting an earlier one it doesn't
+    # actually dominate — would be caught here, not just a change that
+    # under-prunes.
     direct_departures = {j.departure_time for j in journeys if j.kind == "direct"}
-    assert "09:06:00" in direct_departures
-    assert "09:35:00" in direct_departures
+    assert direct_departures == {
+        "09:06:00",
+        "09:11:30",
+        "09:19:30",
+        "09:26:30",
+        "09:35:00",
+        "09:41:30",
+        "09:49:30",
+        "09:56:30",
+    }
+
+
+def test_dominated_journeys_are_filtered_from_bns_wat(conn):
+    """2026-08-01 UX review: BNS->WAT has frequent direct service, so every
+    single-interchange candidate is beaten by some direct train that departs
+    at least as late and arrives at least as early — none should survive."""
+    origin = queries.get_station(conn, "BNS")
+    destination = queries.get_station(conn, "WAT")
+    journeys = queries.find_journeys(conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60)
+
+    assert journeys, "expected at least the direct BNS->WAT trips"
+    assert all(j.kind == "direct" for j in journeys), "no interchange should beat this route's direct service"
+
+
+def test_dominated_interchange_dropped_when_a_later_departure_reaches_the_same_arrival(conn):
+    """The 09:06:00 CLJ change used to be the documented worked example, but
+    it's dominated: 09:11:30 reaches the same interchange, on the same
+    connecting train, arriving at the same time (10:32:30) — so there's no
+    reason to ever leave at 09:06:00 for this journey. Only the latest
+    departure that still catches a given arrival should survive."""
+    origin = queries.get_station(conn, "BNS")
+    destination = queries.get_station(conn, "LRD")
+    journeys = queries.find_journeys(conn, origin, destination, dt.date(2026, 8, 17), dt.time(9, 0), 60)
+
+    clj_arrivals_at_10_32_30 = [
+        j
+        for j in journeys
+        if j.kind == "interchange"
+        and j.interchange.interchange.stop_code == "CLJ"
+        and j.arrival_time == "10:32:30"
+    ]
+    assert len(clj_arrivals_at_10_32_30) == 1, "only the latest-departing, non-dominated option should remain"
+    assert clj_arrivals_at_10_32_30[0].departure_time == "09:26:30"
+
+
+def _journey(kind, departure_time, arrival_time, *, departure_next_day=False, arrival_next_day=False):
+    return queries.Journey(
+        kind=kind,
+        departure_time=departure_time,
+        departure_next_day=departure_next_day,
+        arrival_time=arrival_time,
+        arrival_next_day=arrival_next_day,
+        duration_minutes=1,
+    )
+
+
+def test_dominance_filter_keeps_ties_on_departure_arrival_and_changes():
+    """Two candidates identical on departure, arrival, and change count are
+    genuinely different real choices (e.g. two different interchange
+    stations offering the same overall trip) — a tie doesn't dominate."""
+    a = _journey("interchange", "09:00:00", "10:00:00")
+    b = _journey("interchange", "09:00:00", "10:00:00")
+    assert queries._drop_dominated_journeys([a, b]) == [a, b]
+
+
+def test_dominance_filter_drops_a_strictly_worse_journey():
+    # Same departure, but the direct arrives earlier with fewer changes —
+    # dominates the interchange outright.
+    direct = _journey("direct", "09:00:00", "09:30:00")
+    interchange = _journey("interchange", "09:00:00", "09:45:00")
+    assert queries._drop_dominated_journeys([direct, interchange]) == [direct]
+
+
+def test_dominance_filter_isolates_the_changes_axis():
+    # Same departure and arrival — only the change count differs — so this
+    # can't pass by accident of the time-based axes alone.
+    direct = _journey("direct", "09:00:00", "09:30:00")
+    interchange = _journey("interchange", "09:00:00", "09:30:00")
+    assert queries._drop_dominated_journeys([direct, interchange]) == [direct]
+
+
+def test_dominance_filter_can_drop_a_direct_journey():
+    # A deliberate departure from how e.g. SWR's own planner behaves (it
+    # lists every scheduled direct train): applied uniformly, a later
+    # direct that also arrives earlier makes an earlier, slower direct
+    # pointless to offer too, not just interchanges.
+    slower_earlier = _journey("direct", "09:00:00", "09:50:00")
+    faster_later = _journey("direct", "09:10:00", "09:40:00")
+    assert queries._drop_dominated_journeys([slower_earlier, faster_later]) == [faster_later]
+
+
+def test_dominance_filter_keeps_both_across_midnight_when_neither_dominates():
+    # 23:50 same-day vs 00:10 next-day: 1430 vs 1450 absolute minutes —
+    # the later one is genuinely later, not wrapped back around to "earlier"
+    # by the day boundary.
+    late_tonight = _journey("direct", "23:50:00", "23:59:00")
+    early_tomorrow = _journey("direct", "00:10:00", "00:20:00", departure_next_day=True, arrival_next_day=True)
+    result = queries._drop_dominated_journeys([late_tonight, early_tomorrow])
+    assert result == [late_tonight, early_tomorrow]
+
+
+def test_num_changes_raises_on_unrecognized_journey_kind():
+    # A future journey kind (e.g. multi-interchange) must not silently
+    # collapse to a wrong change count and dominate/delete real results.
+    unknown = _journey("double-interchange", "09:00:00", "10:00:00")
+    with pytest.raises(ValueError):
+        queries._num_changes(unknown)
+
+
+def test_dominance_filter_drops_across_midnight_when_dominated():
+    # A same-day-late departure that arrives after a next-day-early one that
+    # departs even later still — the next-day journey wins on both axes.
+    dominated = _journey("direct", "23:50:00", "00:40:00", arrival_next_day=True)
+    dominant = _journey("direct", "23:55:00", "00:30:00", departure_next_day=False, arrival_next_day=True)
+    assert queries._drop_dominated_journeys([dominated, dominant]) == [dominant]
+
+
+def test_dominance_filter_keeps_journeys_that_trade_off_departure_and_arrival():
+    # Neither dominates: the first departs earlier but also arrives earlier.
+    earlier = _journey("direct", "09:00:00", "09:30:00")
+    later = _journey("direct", "09:10:00", "09:50:00")
+    assert queries._drop_dominated_journeys([earlier, later]) == [earlier, later]

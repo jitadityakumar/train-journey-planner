@@ -104,16 +104,24 @@ def test_api_journeys_golden_interchange(client):
     )
     assert r.status_code == 200
     body = r.json()
+    # 09:06:00's CLJ change used to be the documented worked example, but a
+    # dominance-filtered response (2026-08-01 UX review) correctly drops it:
+    # a 09:11:30 departure reaches the same interchange, on the same
+    # connecting train, arriving at the same time — so 09:06:00 offers no
+    # reason to leave earlier. 09:26:30 is the earliest surviving CLJ change
+    # (nothing else departs later and still catches the 10:32:30 arrival).
     match = next(
         j
         for j in body["journeys"]
         if j["kind"] == "interchange"
-        and j["interchange"]["leg1"]["departure_time"] == "09:06:00"
+        and j["interchange"]["leg1"]["departure_time"] == "09:26:30"
         and j["interchange"]["interchange"]["crs_code"] == "CLJ"
     )
-    assert match["interchange"]["interchange"]["crs_code"] == "CLJ"
-    assert match["interchange"]["connection_minutes"] == 28
     assert match["interchange"]["leg2"]["arrival_time"] == "10:32:30"
+    assert not any(
+        j["kind"] == "interchange" and j["interchange"]["leg1"]["departure_time"] == "09:06:00"
+        for j in body["journeys"]
+    ), "09:06:00's change is dominated by 09:11:30's identical-arrival connection and should be filtered out"
 
 
 def test_api_journeys_same_station_returns_400(client):
