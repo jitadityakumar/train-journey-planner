@@ -303,6 +303,40 @@ def test_results_page_renders_golden_path(client):
     assert "09:35" in r.text
 
 
+def test_results_page_prev_next_links_shift_by_window(client):
+    r = client.get(
+        "/results",
+        params={
+            "from_": "BNS",
+            "to": "WAT",
+            "date": "2026-08-17",
+            "time": "09:00",
+            "window_minutes": "120",
+        },
+    )
+    assert r.status_code == 200
+    assert "date=2026-08-17&amp;time=07%3A00" in r.text  # previous window
+    assert "date=2026-08-17&amp;time=11%3A00" in r.text  # next window
+    assert "window_minutes=120" in r.text
+    assert "from_=BNS&amp;to=WAT" in r.text
+
+
+def test_results_page_next_link_crosses_midnight(client):
+    r = client.get(
+        "/results",
+        params={
+            "from_": "BNS",
+            "to": "WAT",
+            "date": "2026-08-17",
+            "time": "23:00",
+            "window_minutes": "120",
+        },
+    )
+    assert r.status_code == 200
+    assert "date=2026-08-18&amp;time=01%3A00" in r.text  # next window rolls to next day
+    assert "date=2026-08-17&amp;time=21%3A00" in r.text  # previous window stays same day
+
+
 def test_results_page_heading_shows_full_station_names(client):
     r = client.get(
         "/results",
