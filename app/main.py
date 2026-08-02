@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import logging
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -10,7 +11,7 @@ from urllib.parse import urlencode
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -26,6 +27,8 @@ from app.schemas import (
     JourneysResponse,
     StationOut,
 )
+
+logger = logging.getLogger("train_journey_planner.main")
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
@@ -62,6 +65,57 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="UK Train Journey Planner", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# GitHub issue #20: bounds how many DB-touching requests run concurrently
+# (see config.MAX_CONCURRENT_DB_REQUESTS for how the default was sized).
+# A plain asyncio.Semaphore, not anyio.to_thread's shared thread limiter —
+# that limiter is global to the whole process, including the lifespan's
+# cold-start `asyncio.to_thread(refresh_if_missing)` build, and a small cap
+# there risks stalling startup behind API traffic or vice versa. Scoping the
+# semaphore to this middleware keeps it independent of that.
+_DB_ROUTE_PATHS = frozenset({"/api/direct", "/api/journeys", "/api/stations", "/results"})
+_db_request_semaphore = asyncio.Semaphore(config.MAX_CONCURRENT_DB_REQUESTS)
+
+
+class ConcurrencyLimitMiddleware:
+    """Raw ASGI middleware, not `@app.middleware("http")` (Starlette's
+    `BaseHTTPMiddleware`) — the latter runs `call_next` inside an `anyio`
+    task group, which collides with `ServerErrorMiddleware`'s re-raise-
+    after-send behavior for unhandled exceptions (see the catch-all handler
+    above) and surfaces as a stray unraisable exception even though the
+    client still gets the right response. Confirmed via
+    tests/test_concurrency.py: the BaseHTTPMiddleware version made that
+    test fail with an ExceptionGroup even though the live app (verified
+    against a running container) returned the correct 500 JSON either way.
+    A plain ASGI callable doesn't wrap anything in a task group, so it
+    doesn't have this problem."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or scope["path"] not in _DB_ROUTE_PATHS:
+            await self.app(scope, receive, send)
+            return
+        try:
+            await asyncio.wait_for(
+                _db_request_semaphore.acquire(), timeout=config.DB_REQUEST_ACQUIRE_TIMEOUT_SECONDS
+            )
+        except asyncio.TimeoutError:
+            response = JSONResponse(
+                status_code=503,
+                content={"detail": "Server is at capacity — please retry shortly."},
+                headers={"Retry-After": str(config.DB_REQUEST_ACQUIRE_TIMEOUT_SECONDS)},
+            )
+            await response(scope, receive, send)
+            return
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _db_request_semaphore.release()
+
+
+app.add_middleware(ConcurrencyLimitMiddleware)
+
 
 @app.exception_handler(RequestValidationError)
 async def results_validation_error(request: Request, exc: RequestValidationError):
@@ -94,6 +148,20 @@ async def results_validation_error(request: Request, exc: RequestValidationError
         },
         status_code=422,
     )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    # GitHub issue #20: under concurrent load, requests were intermittently
+    # hitting Starlette's bare (non-JSON) 500 with no logging anywhere in
+    # the stack, leaving the actual traceback uncaptured. This doesn't fix
+    # the underlying crash — it just makes it observable (full traceback in
+    # logs) and gives callers FastAPI's normal JSON error shape instead of
+    # Starlette's default HTML/plain-text one. HTTPException instances never
+    # reach this handler — Starlette dispatches those to its own
+    # more-specific default handler first.
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path, exc_info=exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal Server Error"})
 
 
 def get_db():

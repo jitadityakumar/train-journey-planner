@@ -275,7 +275,8 @@ All error responses use FastAPI's default `{"detail": "..."}` shape (see `ErrorR
 |--------|--------------------------------------------------------------------------|
 | 400    | unknown CRS code, same origin/destination, date out of the feed's covered range (past dates/times within the feed's range are allowed — see `is_past` above, not an error), or `/api/direct`'s `window_minutes` over 180 without `include_dominated=true` (see `/api/direct`'s own section above) |
 | 422    | request validation failure (e.g. malformed date/time, `from`/`to` not exactly 3 chars) — standard FastAPI shape, not the custom one below |
-| 503    | GTFS dataset not loaded yet (cold start) — retry shortly              |
+| 500    | unhandled server error — logged with a full traceback server-side (GitHub issue #20; previously these reached the client as Starlette's bare non-JSON 500 with no server-side logging at all) |
+| 503    | either the GTFS dataset isn't loaded yet (cold start — retry shortly), or the server is at its concurrent-request cap (GitHub issue #20's `MAX_CONCURRENT_DB_REQUESTS`, default 4) and the request timed out waiting for a free slot — retry shortly; this case includes a `Retry-After` header (seconds) |
 
 Note: `/results` (the HTML page, not `/api/*`) has its own 422 handling that renders a styled
 error page instead of a JSON blob — not relevant to API consumers.

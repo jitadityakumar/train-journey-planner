@@ -55,8 +55,24 @@ def get_connection(db_path: Path) -> sqlite3.Connection:
 def get_readonly_connection(db_path: Path) -> sqlite3.Connection:
     """A connection opened read-only, for request-serving code that should
     never write. Also avoids a journal file appearing next to a database
-    that the refresh job may `os.replace` out from under it."""
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    that the refresh job may `os.replace` out from under it.
+
+    `check_same_thread=False`: this is opened by a sync FastAPI dependency
+    generator (`get_db()` in app/main.py), whose setup/endpoint-body/teardown
+    are each dispatched as separate `run_in_threadpool` calls — AnyIO doesn't
+    guarantee those land on the same OS thread, so the default
+    (`check_same_thread=True`, pinning the connection to its creating thread)
+    raised `sqlite3.ProgrammingError` under concurrent load (GitHub issue
+    #20; confirmed via scripts/concurrency_repro.py against a container with
+    exception logging, 2026-08-02). Safe to disable here specifically
+    because each connection is opened fresh per request, used only within
+    that request's handling, and never shared or cached across requests —
+    the thread-affinity check exists to catch concurrent cross-thread reuse
+    of one connection, which this per-request-connection pattern never does
+    even when a single request's own three threadpool calls land on
+    different threads.
+    """
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
