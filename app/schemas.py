@@ -30,6 +30,11 @@ class DirectTripOut(BaseModel):
     duration_minutes: int
     is_past: bool
     intermediate_stops: list[IntermediateStopOut]
+    # Set when this is a synthesized reversal-continuation trip (a physical
+    # train that terminates, reverses, and continues under a different
+    # trip_id — see GitHub issue #15) and the journey genuinely spans both
+    # legs: the stop where the reversal happens, not an ordinary change.
+    reverses_at: StationOut | None = None
 
 
 class InterchangeTripOut(BaseModel):

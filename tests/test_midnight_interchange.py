@@ -45,7 +45,13 @@ def _write_feed(gtfs_dir: Path, trips, stop_times, calendar):
     STOPS.to_csv(gtfs_dir / "stops.txt", index=False)
     AGENCY.to_csv(gtfs_dir / "agency.txt", index=False)
     ROUTES.to_csv(gtfs_dir / "routes.txt", index=False)
-    pd.DataFrame(trips).to_csv(gtfs_dir / "trips.txt", index=False)
+    trips_df = pd.DataFrame(trips)
+    # No reversal-continuation trips in this fixture — trip_short_name is a
+    # required column (see app/db.py's _load_trips) but left blank here so
+    # _build_trip_continuations finds nothing to synthesize.
+    if "trip_short_name" not in trips_df.columns:
+        trips_df["trip_short_name"] = ""
+    trips_df.to_csv(gtfs_dir / "trips.txt", index=False)
     pd.DataFrame(stop_times).to_csv(gtfs_dir / "stop_times.txt", index=False)
     pd.DataFrame(calendar).to_csv(gtfs_dir / "calendar.txt", index=False)
     pd.DataFrame(columns=["service_id", "date", "exception_type"]).to_csv(

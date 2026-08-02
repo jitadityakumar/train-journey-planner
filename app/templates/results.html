@@ -12,6 +12,9 @@
     {% if trip.route_description %}{{ trip.route_description }}{% endif %}
     {% if trip.headsign %} &middot; towards {{ trip.headsign }}{% endif %}
   </div>
+  {% if trip.reverses_at %}
+    <div class="trip-reversal">Stay on board — continues as the same train at {{ trip.reverses_at.name }} ({{ trip.reverses_at.crs_code }})</div>
+  {% endif %}
   {% if trip.intermediate_stops %}
     <details>
       <summary>{{ trip.intermediate_stops|length }} intermediate stop{{ "" if trip.intermediate_stops|length == 1 else "s" }}</summary>
