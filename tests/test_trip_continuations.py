@@ -14,6 +14,20 @@ Covers, per PLAN.md's Opus-reviewed test list:
   - an ambiguous match, in both directions, is skipped rather than guessed
   - a blank trip_short_name never matches
   - a reversal spanning physical midnight (>=24:00:00 GTFS notation)
+
+Plus, per a real correctness bug found live against the production feed
+(2026-08-02) after the original origin-only join was measured to find zero
+of the real feed's actual reversals:
+  - a portion join, where leg 2 doesn't originate at the reversal stop but
+    calls there mid-trip having already started a stop earlier (the actual
+    shape of both real issue #15 cases)
+  - a same-headcode/same-service group large enough to be headcode noise
+    (mirrors the real feed's "0B00" placeholder) is never synthesized, even
+    when an otherwise-valid reversal pair sits inside it
+  - a group exactly at the size cap is still accepted (boundary case)
+  - a continuing trip that calls at the reversal stop more than once inside
+    the dwell window (e.g. an out-and-back working) is skipped as
+    ambiguous rather than an arbitrary occurrence being picked
 """
 
 from __future__ import annotations
@@ -60,10 +74,31 @@ STOPS = pd.DataFrame(
         {"stop_id": "S_CB", "stop_code": "CCB", "stop_name": "Chain B"},
         {"stop_id": "S_CC", "stop_code": "CCC", "stop_name": "Chain C"},
         {"stop_id": "S_CD", "stop_code": "CCD", "stop_name": "Chain D"},
+        {"stop_id": "S_PJA", "stop_code": "PJA", "stop_name": "Portion Join A"},
+        {"stop_id": "S_PJR", "stop_code": "PJR", "stop_name": "Portion Join Reversal"},
+        {"stop_id": "S_PJP", "stop_code": "PJP", "stop_name": "Portion Join Pre"},
+        {"stop_id": "S_PJQ", "stop_code": "PJQ", "stop_name": "Portion Join Post"},
+        {"stop_id": "S_LGA", "stop_code": "LGA", "stop_name": "Large Group A"},
+        {"stop_id": "S_LGR", "stop_code": "LGR", "stop_name": "Large Group Reversal"},
+        {"stop_id": "S_LGB", "stop_code": "LGB", "stop_name": "Large Group B"},
+        {"stop_id": "S_LGC", "stop_code": "LGC", "stop_name": "Large Group C"},
+        {"stop_id": "S_LGD", "stop_code": "LGD", "stop_name": "Large Group D"},
+        {"stop_id": "S_LGE", "stop_code": "LGE", "stop_name": "Large Group E"},
+        {"stop_id": "S_LGF", "stop_code": "LGF", "stop_name": "Large Group F"},
+        {"stop_id": "S_CP1", "stop_code": "CP1", "stop_name": "Cap Boundary 1"},
+        {"stop_id": "S_CPR", "stop_code": "CPR", "stop_name": "Cap Boundary Reversal"},
+        {"stop_id": "S_CP2", "stop_code": "CP2", "stop_name": "Cap Boundary 2"},
+        {"stop_id": "S_CPN1", "stop_code": "CN1", "stop_name": "Cap Boundary Noise 1"},
+        {"stop_id": "S_CPN2", "stop_code": "CN2", "stop_name": "Cap Boundary Noise 2"},
+        {"stop_id": "S_DCX", "stop_code": "DCX", "stop_name": "Double Call X"},
+        {"stop_id": "S_DCR", "stop_code": "DCR", "stop_name": "Double Call Reversal"},
+        {"stop_id": "S_DCY", "stop_code": "DCY", "stop_name": "Double Call Y"},
+        {"stop_id": "S_DCZ", "stop_code": "DCZ", "stop_name": "Double Call Z"},
+        {"stop_id": "S_DC1", "stop_code": "DC1", "stop_name": "Double Call Origin"},
     ]
 )
 ROUTES = pd.DataFrame(
-    [{"route_id": f"R{i}", "agency_id": "TT", "route_short_name": "", "route_long_name": f"Route {i}"} for i in range(1, 25)]
+    [{"route_id": f"R{i}", "agency_id": "TT", "route_short_name": "", "route_long_name": f"Route {i}"} for i in range(1, 35)]
 )
 AGENCY = pd.DataFrame([{"agency_id": "TT", "agency_name": "Test Trains"}])
 
@@ -136,6 +171,35 @@ def db_path(tmp_path_factory) -> Path:
         {"route_id": "R19", "service_id": "SVC1", "trip_id": "T_C1", "trip_headsign": "Chain B", "trip_short_name": "6001"},
         {"route_id": "R20", "service_id": "SVC1", "trip_id": "T_C2", "trip_headsign": "Chain C", "trip_short_name": "6001"},
         {"route_id": "R21", "service_id": "SVC1", "trip_id": "T_C3", "trip_headsign": "Chain D", "trip_short_name": "6001"},
+        # Scenario 10: portion join — leg 2 does NOT originate at the
+        # reversal stop, it originates one stop earlier and just *calls* at
+        # it mid-trip before continuing — the actual shape of both of issue
+        # #15's real confirmed cases (found live against the production
+        # feed, 2026-08-02). The synthesized trip must start from the join
+        # stop onward and drop leg 2's earlier, pre-join stop entirely.
+        {"route_id": "R22", "service_id": "SVC1", "trip_id": "T_PJA_PJR", "trip_headsign": "Portion Join Reversal", "trip_short_name": "7001"},
+        {"route_id": "R23", "service_id": "SVC1", "trip_id": "T_PJP_PJQ", "trip_headsign": "Portion Join Post", "trip_short_name": "7001"},
+        # Scenario 11: large headcode group (like the real feed's "0B00"
+        # placeholder) — an otherwise-valid reversal pair (LG1/LG2) must NOT
+        # synthesize because the (trip_short_name, service_id) group has 4
+        # members, above REVERSAL_MAX_HEADCODE_GROUP_SIZE (3). LG3/LG4 are
+        # unrelated noise trips that exist purely to inflate the group size.
+        {"route_id": "R24", "service_id": "SVC1", "trip_id": "T_LG1", "trip_headsign": "Large Group Reversal", "trip_short_name": "0B00"},
+        {"route_id": "R25", "service_id": "SVC1", "trip_id": "T_LG2", "trip_headsign": "Large Group B", "trip_short_name": "0B00"},
+        {"route_id": "R26", "service_id": "SVC1", "trip_id": "T_LG3", "trip_headsign": "Large Group D", "trip_short_name": "0B00"},
+        {"route_id": "R27", "service_id": "SVC1", "trip_id": "T_LG4", "trip_headsign": "Large Group F", "trip_short_name": "0B00"},
+        # Scenario 12: group exactly at REVERSAL_MAX_HEADCODE_GROUP_SIZE (3) —
+        # boundary case, must still be accepted (not off-by-one rejected).
+        # CPN1/CPN2 is unrelated noise sharing the same headcode/service,
+        # purely to bring the group to exactly 3.
+        {"route_id": "R28", "service_id": "SVC1", "trip_id": "T_CP1_CPR", "trip_headsign": "Cap Boundary Reversal", "trip_short_name": "8001"},
+        {"route_id": "R29", "service_id": "SVC1", "trip_id": "T_CPR_CP2", "trip_headsign": "Cap Boundary 2", "trip_short_name": "8001"},
+        {"route_id": "R30", "service_id": "SVC1", "trip_id": "T_CPN1_CPN2", "trip_headsign": "Cap Boundary Noise 2", "trip_short_name": "8001"},
+        # Scenario 13: leg 2 calls at the reversal stop twice inside the
+        # dwell window (an out-and-back working) — must be skipped as
+        # ambiguous, not resolved by picking either occurrence.
+        {"route_id": "R31", "service_id": "SVC1", "trip_id": "T_DC1_DCR", "trip_headsign": "Double Call Reversal", "trip_short_name": "9001"},
+        {"route_id": "R32", "service_id": "SVC1", "trip_id": "T_DCX_DCY", "trip_headsign": "Double Call Y", "trip_short_name": "9001"},
     ]
 
     over_cap = _dep(10, 20, gap_min + 1)  # BAR departure, strictly outside the cap
@@ -203,6 +267,49 @@ def db_path(tmp_path_factory) -> Path:
         _stop_time("T_C2", "S_CC", 2, "14:28:00"),
         _stop_time("T_C3", "S_CC", 1, "14:36:00"),
         _stop_time("T_C3", "S_CD", 2, "14:48:00"),
+        # Scenario 10 — portion join: leg 2 originates at PJP (before the
+        # reversal stop), calls at PJR (the reversal stop) at sequence 2,
+        # then continues to PJQ. 4-minute dwell (15:20 arrival -> 15:24
+        # departure), same as issue #15's real cases.
+        _stop_time("T_PJA_PJR", "S_PJA", 1, "15:00:00"),
+        _stop_time("T_PJA_PJR", "S_PJR", 2, "15:20:00"),
+        _stop_time("T_PJP_PJQ", "S_PJP", 1, "15:05:00"),
+        _stop_time("T_PJP_PJQ", "S_PJR", 2, "15:24:00"),
+        _stop_time("T_PJP_PJQ", "S_PJQ", 3, "15:50:00"),
+        # Scenario 11 — large headcode group: LG1 -> LG2 would otherwise be
+        # a valid 4-minute-dwell reversal, but the group (0B00, SVC1) has 4
+        # members (LG1-LG4), above the cap — must not synthesize.
+        _stop_time("T_LG1", "S_LGA", 1, "16:00:00"),
+        _stop_time("T_LG1", "S_LGR", 2, "16:10:00"),
+        _stop_time("T_LG2", "S_LGR", 1, "16:14:00"),
+        _stop_time("T_LG2", "S_LGB", 2, "16:30:00"),
+        _stop_time("T_LG3", "S_LGC", 1, "17:00:00"),
+        _stop_time("T_LG3", "S_LGD", 2, "17:20:00"),
+        _stop_time("T_LG4", "S_LGE", 1, "18:00:00"),
+        _stop_time("T_LG4", "S_LGF", 2, "18:20:00"),
+        # Scenario 12 — group of exactly 3 (T_CP1_CPR/T_CPR_CP2's genuine
+        # pair, plus T_CPN1_CPN2 as unrelated noise sharing the headcode)
+        # must still be accepted. 4-minute dwell.
+        _stop_time("T_CP1_CPR", "S_CP1", 1, "19:00:00"),
+        _stop_time("T_CP1_CPR", "S_CPR", 2, "19:10:00"),
+        _stop_time("T_CPR_CP2", "S_CPR", 1, "19:14:00"),
+        _stop_time("T_CPR_CP2", "S_CP2", 2, "19:30:00"),
+        _stop_time("T_CPN1_CPN2", "S_CPN1", 1, "20:00:00"),
+        _stop_time("T_CPN1_CPN2", "S_CPN2", 2, "20:20:00"),
+        # Scenario 13 — leg 2 (T_DCX_DCY) calls at the reversal stop (DCR)
+        # twice within the dwell window: once outbound (19:02, seq 2) and
+        # again on the way back (19:05, seq 4), both within 10 minutes of
+        # leg 1's 19:00 terminus arrival. A final stop (DCZ) after the
+        # second DCR call ensures neither occurrence is leg 2's own
+        # terminus (which is never a valid join point). Neither occurrence
+        # should be used.
+        _stop_time("T_DC1_DCR", "S_DC1", 1, "18:50:00"),
+        _stop_time("T_DC1_DCR", "S_DCR", 2, "19:00:00"),
+        _stop_time("T_DCX_DCY", "S_DCX", 1, "18:50:00"),
+        _stop_time("T_DCX_DCY", "S_DCR", 2, "19:02:00"),
+        _stop_time("T_DCX_DCY", "S_DCY", 3, "19:04:00"),
+        _stop_time("T_DCX_DCY", "S_DCR", 4, "19:05:00"),
+        _stop_time("T_DCX_DCY", "S_DCZ", 5, "19:10:00"),
     ]
     calendar = [_calendar_row("SVC1", "monday", "20260803", "20260803")]
 
@@ -384,3 +491,91 @@ def test_double_reversal_is_not_offered_as_a_fake_interchange(conn):
     assert interchange == [], (
         f"same physical train (C1-C2-C3) offered as a fake interchange: {interchange}"
     )
+
+
+def test_portion_join_matches_a_mid_trip_call_not_just_an_origin(conn):
+    """Both of issue #15's real confirmed cases are portion joins: leg 2
+    doesn't originate at the reversal stop, it calls there mid-trip having
+    already started a stop earlier — found live against the production
+    feed, 2026-08-02, after an origin-only match found zero real reversals.
+    The synthesized trip must start from the join stop and drop leg 2's
+    earlier, pre-join stop (PJP) entirely."""
+    origin = queries.get_station(conn, "PJA")
+    destination = queries.get_station(conn, "PJQ")
+
+    results = queries.find_direct_trips(conn, origin, destination, MONDAY, dt.time(14, 0), 120)
+    assert len(results) == 1
+    trip = results[0]
+    assert trip.departure_time == "15:00:00"
+    assert trip.arrival_time == "15:50:00"
+    assert trip.reverses_at is not None
+    assert trip.reverses_at.stop_code == "PJR"
+
+    # Leg 2's own pre-join stop must not appear anywhere in the merge —
+    # querying from it should only ever find the plain, unmerged leg 2 trip.
+    from_pre = queries.find_direct_trips(
+        conn, queries.get_station(conn, "PJP"), destination, MONDAY, dt.time(14, 0), 120
+    )
+    assert [t.trip_id for t in from_pre] == ["T_PJP_PJQ"]
+
+
+def test_large_headcode_group_is_never_synthesized(conn):
+    """(0B00, SVC1) has 4 members here — mirrors the real feed's "0B00"
+    placeholder headcode, carried by ~17% of all trips across every
+    operator, which forms enormous same-headcode/same-service groups with
+    no genuine reversal relationship. LG1 -> LG2 would otherwise be a valid
+    4-minute-dwell reversal, but must be rejected by the group-size cap
+    before the dwell/ambiguity checks ever see it."""
+    origin = queries.get_station(conn, "LGA")
+    destination = queries.get_station(conn, "LGB")
+    assert queries.find_direct_trips(conn, origin, destination, MONDAY, dt.time(15, 0), 120) == []
+
+    # Both legs still individually queryable — the pair just isn't stitched together.
+    leg1 = queries.find_direct_trips(
+        conn, origin, queries.get_station(conn, "LGR"), MONDAY, dt.time(15, 0), 120
+    )
+    assert [t.trip_id for t in leg1] == ["T_LG1"]
+
+
+def test_group_exactly_at_the_size_cap_is_still_accepted(conn):
+    """A group of exactly REVERSAL_MAX_HEADCODE_GROUP_SIZE (3, headcode
+    8001: T_CP1_CPR + T_CPR_CP2's genuine pair, plus T_CPN1_CPN2 as
+    unrelated noise) must not be rejected by an off-by-one error in the
+    `BETWEEN 2 AND :max_group` bound."""
+    assert config.REVERSAL_MAX_HEADCODE_GROUP_SIZE == 3, (
+        "test assumes the cap is 3 — this scenario's group has exactly 3 members"
+    )
+    origin = queries.get_station(conn, "CP1")
+    destination = queries.get_station(conn, "CP2")
+    results = queries.find_direct_trips(conn, origin, destination, MONDAY, dt.time(18, 0), 120)
+    assert len(results) == 1
+    assert results[0].trip_id == "T_CP1_CPR+T_CPR_CP2"
+    assert results[0].reverses_at.stop_code == "CPR"
+
+
+def test_continuation_calling_at_reversal_stop_twice_is_skipped_as_ambiguous(conn):
+    """T_DCX_DCY calls at the reversal stop (DCR) twice within the dwell
+    window (an out-and-back working) — there is no principled way to pick
+    which occurrence is the "real" join, so this must be skipped entirely,
+    not resolved by arbitrarily using either occurrence. Asserted directly
+    against `synthesized_trips`, not indirectly via a specific destination
+    station's reachability — an earlier version of this test picked a
+    destination (DCY) that an arbitrary-first-or-last-occurrence bug
+    happened to still drop, so it passed even when a bogus pair (dropping
+    only the *other* occurrence's stops) was silently synthesized. Found
+    while deliberately reintroducing that exact bug to verify this test,
+    2026-08-02."""
+    row = conn.execute(
+        "SELECT 1 FROM synthesized_trips WHERE leg1_trip_id = 'T_DC1_DCR' AND leg2_trip_id = 'T_DCX_DCY'"
+    ).fetchone()
+    assert row is None
+
+    origin = queries.get_station(conn, "DC1")
+    destination = queries.get_station(conn, "DCY")
+    assert queries.find_direct_trips(conn, origin, destination, MONDAY, dt.time(18, 0), 120) == []
+
+    # Both legs still individually queryable — the pair just isn't stitched together.
+    leg1 = queries.find_direct_trips(
+        conn, origin, queries.get_station(conn, "DCR"), MONDAY, dt.time(18, 0), 120
+    )
+    assert [t.trip_id for t in leg1] == ["T_DC1_DCR"]
