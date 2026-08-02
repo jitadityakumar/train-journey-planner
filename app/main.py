@@ -96,10 +96,14 @@ class ConcurrencyLimitMiddleware:
         if scope["type"] != "http" or scope["path"] not in _DB_ROUTE_PATHS:
             await self.app(scope, receive, send)
             return
+        # Captured once into a local rather than read twice by module-global
+        # name (acquire, then release) — harmless today since the global is
+        # never reassigned post-startup (only tests swap it, between
+        # requests), but this removes even the possibility of acquire/
+        # release ever targeting different Semaphore objects.
+        semaphore = _db_request_semaphore
         try:
-            await asyncio.wait_for(
-                _db_request_semaphore.acquire(), timeout=config.DB_REQUEST_ACQUIRE_TIMEOUT_SECONDS
-            )
+            await asyncio.wait_for(semaphore.acquire(), timeout=config.DB_REQUEST_ACQUIRE_TIMEOUT_SECONDS)
         except asyncio.TimeoutError:
             response = JSONResponse(
                 status_code=503,
@@ -111,7 +115,7 @@ class ConcurrencyLimitMiddleware:
         try:
             await self.app(scope, receive, send)
         finally:
-            _db_request_semaphore.release()
+            semaphore.release()
 
 
 app.add_middleware(ConcurrencyLimitMiddleware)
