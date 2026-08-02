@@ -337,6 +337,16 @@ def test_results_page_next_link_crosses_midnight(client):
     assert "date=2026-08-17&amp;time=21%3A00" in r.text  # previous window stays same day
 
 
+def test_results_page_omits_prev_next_links_on_validation_error(client):
+    r = client.get(
+        "/results",
+        params={"from_": "AA", "to": "WAT", "date": "2026-08-17", "time": "09:00"},
+    )
+    assert r.status_code == 422
+    assert 'class="window-nav"' not in r.text
+    assert 'href=""' not in r.text
+
+
 def test_results_page_heading_shows_full_station_names(client):
     r = client.get(
         "/results",

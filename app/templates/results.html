@@ -74,8 +74,10 @@
     {% endif %}
   {% endif %}
 
-  <div class="window-nav">
-    <a class="window-nav-link" href="{{ prev_url }}">&larr; Previous</a>
-    <a class="window-nav-link" href="{{ next_url }}">Next &rarr;</a>
-  </div>
+  {% if prev_url and next_url %}
+    <div class="window-nav">
+      <a class="window-nav-link" href="{{ prev_url }}">&larr; Previous</a>
+      <a class="window-nav-link" href="{{ next_url }}">Next &rarr;</a>
+    </div>
+  {% endif %}
 {% endblock %}

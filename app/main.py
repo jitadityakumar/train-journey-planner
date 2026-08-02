@@ -335,7 +335,7 @@ def results(
             "date": shifted.date().isoformat(),
             "time": shifted.strftime("%H:%M"),
             "window_minutes": window_minutes,
-            "direct_only": direct_only,
+            "direct_only": str(direct_only).lower(),
         }
         return f"/results?{urlencode(params)}"
 
