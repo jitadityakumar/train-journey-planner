@@ -103,3 +103,24 @@ STATION_ALIASES: dict[str, tuple[str, ...]] = {
 # empirically tuned against the real feed.
 DOMINANCE_FETCH_BUFFER_MIN_MINUTES = 60
 DOMINANCE_FETCH_BUFFER_MAX_MINUTES = 120
+
+# Caps how many DB-touching requests (/api/direct, /api/journeys,
+# /api/stations, /results) run concurrently — see app/main.py's
+# limit_concurrent_db_requests middleware. GitHub issue #20: this box has 4
+# cores and runs several other containers alongside this app, so unbounded
+# concurrency isn't appropriate even after fixing the crash that unbounded
+# concurrent requests used to trigger (see get_readonly_connection in
+# app/db.py). Sized from a real load test against this box (2026-08-02),
+# not a guess: /api/journeys at its heaviest (180-min window, dominance
+# filtering) is CPU-bound, and CPU already saturates at ~3-3.2 of the 4
+# cores by the time 4 such requests run concurrently — p50 latency scales
+# roughly linearly past that point (8s at 4, 19s at 8, 47s at 16, timeout at
+# 32) with no throughput gain, confirming 4 concurrent requests is
+# approximately this box's real ceiling for this workload, not an
+# arbitrary round number. Revisit if the box's core count or sibling
+# container load changes.
+MAX_CONCURRENT_DB_REQUESTS = int(os.environ.get("MAX_CONCURRENT_DB_REQUESTS", "4"))
+# How long a request waits for a free concurrency slot before giving up
+# with a 503 rather than queueing indefinitely (see the middleware) —
+# unbounded waiting is just unbounded latency wearing a different hat.
+DB_REQUEST_ACQUIRE_TIMEOUT_SECONDS = int(os.environ.get("DB_REQUEST_ACQUIRE_TIMEOUT_SECONDS", "5"))

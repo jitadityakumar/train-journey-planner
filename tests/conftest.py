@@ -45,7 +45,14 @@ def client(fixture_db_path, tmp_path, monkeypatch):
     # import time, so reload it after setting the env var above. Other
     # modules do `from app import config` and read config.GTFS_DB_PATH as an
     # attribute lookup at call time, so they pick up the reloaded values
-    # without needing to be reloaded themselves.
+    # without needing to be reloaded themselves. Exception: app.main's
+    # module-level `_db_request_semaphore` (GitHub issue #20) is sized from
+    # config.MAX_CONCURRENT_DB_REQUESTS once, at app.main's first import —
+    # app.main itself is never reloaded here (module-cached across the whole
+    # test session), so setting MAX_CONCURRENT_DB_REQUESTS as an env var and
+    # relying on this reload will NOT resize the live semaphore. A test that
+    # needs a specific size should monkeypatch app.main._db_request_semaphore
+    # directly instead (see tests/test_concurrency.py).
     import importlib
 
     from app import config
