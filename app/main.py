@@ -5,6 +5,7 @@ import datetime as dt
 import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlencode
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
@@ -323,7 +324,20 @@ def results(
     except HTTPException as exc:
         error = exc.detail
 
-    window_end = dt.datetime.combine(date, time) + dt.timedelta(minutes=window_minutes)
+    window_start = dt.datetime.combine(date, time)
+    window_end = window_start + dt.timedelta(minutes=window_minutes)
+
+    def _shifted_url(shift: dt.timedelta) -> str:
+        shifted = window_start + shift
+        params = {
+            "from_": from_.upper(),
+            "to": to.upper(),
+            "date": shifted.date().isoformat(),
+            "time": shifted.strftime("%H:%M"),
+            "window_minutes": window_minutes,
+            "direct_only": str(direct_only).lower(),
+        }
+        return f"/results?{urlencode(params)}"
 
     return templates.TemplateResponse(
         request,
@@ -338,5 +352,7 @@ def results(
             "window_end_time": window_end.strftime("%H:%M"),
             "window_end_next_day": window_end.date() > date,
             "direct_only": direct_only,
+            "prev_url": _shifted_url(-dt.timedelta(minutes=window_minutes)),
+            "next_url": _shifted_url(dt.timedelta(minutes=window_minutes)),
         },
     )
