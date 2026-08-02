@@ -35,9 +35,13 @@ from __future__ import annotations
 
 import datetime as dt
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TypeVar
 
 from app.config import (
+    DOMINANCE_FETCH_BUFFER_MAX_MINUTES,
+    DOMINANCE_FETCH_BUFFER_MIN_MINUTES,
     MAX_CONNECTION_TIME_MINUTES,
     MIN_CONNECTION_TIME_MINUTES,
     STATION_ALIASES,
@@ -48,6 +52,15 @@ DAY_COLUMNS = (
 )
 
 SECONDS_PER_DAY = 24 * 3600
+
+
+def _dominance_fetch_buffer_minutes(window_minutes: int) -> int:
+    """How much wider than the requested display window to fetch dominance-
+    filtering candidates from (see DOMINANCE_FETCH_BUFFER_MIN/MAX_MINUTES's
+    docstring in config.py) — floor-and-cap, not a flat proportion of
+    `window_minutes`, so this stays sane across this app's full range of
+    window sizes (1 minute up to /api/direct's 24h cap)."""
+    return min(max(window_minutes, DOMINANCE_FETCH_BUFFER_MIN_MINUTES), DOMINANCE_FETCH_BUFFER_MAX_MINUTES)
 
 # Selects service_ids active on :date, with calendar_dates.txt exceptions
 # applied. Left as a subquery (not materialized into Python + a giant IN
@@ -329,21 +342,21 @@ def active_service_ids(conn: sqlite3.Connection, date: dt.date) -> set[str]:
     return {row["service_id"] for row in rows}
 
 
-def find_direct_trips(
+def _fetch_direct_trip_rows(
     conn: sqlite3.Connection,
     origin: Stop,
     destination: Stop,
     date: dt.date,
     window_start: dt.time,
     window_minutes: int,
-) -> list[DirectTrip]:
-    """All direct trips origin -> destination departing within the window on
-    `date`. Also matches trips at either station's alias stop_ids (e.g. a
-    search against PAD also matches PDX, Paddington's separately-coded
-    Elizabeth line platforms — see STATION_ALIASES in config.py / GitHub
-    issue #11) — a rider at either platform is at the same physical station
-    complex, so this needs no interchange/MCT, unlike find_interchange_trips'
-    genuine interchange search below."""
+) -> list[tuple[sqlite3.Row, dt.date]]:
+    """Raw (row, bucket_date) pairs for direct-route candidates departing
+    origin -> destination within the window on `date`, sorted by real-world
+    departure order — the shared fetch step behind find_direct_trips and
+    dominant_direct_trips below. Deliberately doesn't build DirectTrip
+    objects or run the per-row _intermediate_stops query: a widened fetch
+    that's going to be dominance-filtered and trimmed back down shouldn't pay
+    for that on every candidate, only the survivors (see dominant_direct_trips)."""
     if is_same_station_group(origin, destination):
         raise SameStationError(origin.stop_code)
 
@@ -368,39 +381,111 @@ def find_direct_trips(
 
     # Sort by real-world departure order.
     rows.sort(key=lambda pair: _absolute_datetime(pair[1], pair[0]["dep_secs"]))
+    return rows
 
-    results = []
-    for row, bucket_date in rows:
-        intermediate = _intermediate_stops(conn, row["trip_id"], row["origin_seq"], row["dest_seq"])
-        duration_minutes = round((row["arr_secs"] - row["dep_secs"]) / 60)
-        dep_dt = _absolute_datetime(bucket_date, row["dep_secs"])
-        arr_dt = _absolute_datetime(bucket_date, row["arr_secs"])
-        results.append(
-            DirectTrip(
-                trip_id=row["trip_id"],
-                agency_name=row["agency_name"] or None,
-                agency_id=row["agency_id"] or None,
-                route_short_name=row["route_short_name"] or None,
-                route_long_name=row["route_long_name"] or None,
-                trip_headsign=row["trip_headsign"] or None,
-                departure_time=dep_dt.strftime("%H:%M:%S"),
-                arrival_time=arr_dt.strftime("%H:%M:%S"),
-                departure_next_day=dep_dt.date() > date,
-                arrival_next_day=arr_dt.date() > date,
-                duration_minutes=duration_minutes,
-                intermediate_stops=intermediate,
-                reverses_at=(
-                    Stop(
-                        stop_id=row["reversal_stop_id"],
-                        stop_code=row["reversal_stop_code"],
-                        stop_name=row["reversal_stop_name"],
-                    )
-                    if row["reversal_stop_id"] is not None
-                    else None
-                ),
+
+def _build_direct_trip(conn: sqlite3.Connection, row: sqlite3.Row, bucket_date: dt.date, date: dt.date) -> DirectTrip:
+    intermediate = _intermediate_stops(conn, row["trip_id"], row["origin_seq"], row["dest_seq"])
+    duration_minutes = round((row["arr_secs"] - row["dep_secs"]) / 60)
+    dep_dt = _absolute_datetime(bucket_date, row["dep_secs"])
+    arr_dt = _absolute_datetime(bucket_date, row["arr_secs"])
+    return DirectTrip(
+        trip_id=row["trip_id"],
+        agency_name=row["agency_name"] or None,
+        agency_id=row["agency_id"] or None,
+        route_short_name=row["route_short_name"] or None,
+        route_long_name=row["route_long_name"] or None,
+        trip_headsign=row["trip_headsign"] or None,
+        departure_time=dep_dt.strftime("%H:%M:%S"),
+        arrival_time=arr_dt.strftime("%H:%M:%S"),
+        departure_next_day=dep_dt.date() > date,
+        arrival_next_day=arr_dt.date() > date,
+        duration_minutes=duration_minutes,
+        intermediate_stops=intermediate,
+        reverses_at=(
+            Stop(
+                stop_id=row["reversal_stop_id"],
+                stop_code=row["reversal_stop_code"],
+                stop_name=row["reversal_stop_name"],
             )
-        )
-    return results
+            if row["reversal_stop_id"] is not None
+            else None
+        ),
+    )
+
+
+def _row_departure_arrival_secs(row: sqlite3.Row, bucket_date: dt.date, date: dt.date) -> tuple[int, int]:
+    """(departure, arrival) in seconds relative to `date`'s midnight — the
+    same domain find_direct_trips'/find_interchange_trips' own
+    window_start_secs/window_end_secs bounds use, so it's directly
+    comparable to a window cutoff regardless of which service-day bucket the
+    row actually matched (see _day_buckets)."""
+    base = dt.datetime.combine(date, dt.time())
+    dep = int((_absolute_datetime(bucket_date, row["dep_secs"]) - base).total_seconds())
+    arr = int((_absolute_datetime(bucket_date, row["arr_secs"]) - base).total_seconds())
+    return dep, arr
+
+
+def find_direct_trips(
+    conn: sqlite3.Connection,
+    origin: Stop,
+    destination: Stop,
+    date: dt.date,
+    window_start: dt.time,
+    window_minutes: int,
+) -> list[DirectTrip]:
+    """All direct trips origin -> destination departing within the window on
+    `date`. Also matches trips at either station's alias stop_ids (e.g. a
+    search against PAD also matches PDX, Paddington's separately-coded
+    Elizabeth line platforms — see STATION_ALIASES in config.py / GitHub
+    issue #11) — a rider at either platform is at the same physical station
+    complex, so this needs no interchange/MCT, unlike find_interchange_trips'
+    genuine interchange search below.
+
+    Plain, unwidened, undominated — the window here is exactly what's
+    fetched and returned, no dominance filtering or trimming applied. This
+    is deliberate: find_interchange_trips' leg-2 anchoring reuses this
+    function with a connection-feasibility window (not a display window),
+    and widening/filtering it would both change /api/journeys' existing
+    behavior and multiply leg-2 query cost (see GitHub issue #19). Top-level
+    callers that want dominance filtering against a display window should
+    use dominant_direct_trips instead."""
+    rows = _fetch_direct_trip_rows(conn, origin, destination, date, window_start, window_minutes)
+    return [_build_direct_trip(conn, row, bucket_date, date) for row, bucket_date in rows]
+
+
+def dominant_direct_trips(
+    conn: sqlite3.Connection,
+    origin: Stop,
+    destination: Stop,
+    date: dt.date,
+    window_start: dt.time,
+    window_minutes: int,
+) -> list[DirectTrip]:
+    """Direct trips departing in [window_start, window_start + window_minutes],
+    Pareto-filtered against a wider fetch so a faster trip departing just
+    after the display window can correctly dominate a slower one inside it
+    (GitHub issue #19's window-boundary follow-up — see
+    _dominance_fetch_buffer_minutes). Dominance is decided on the cheap
+    (departure_secs, arrival_secs) key before paying for the per-row
+    _intermediate_stops query, so the wider fetch mostly only costs extra for
+    candidates that actually survive to be displayed.
+
+    Used by /api/direct's own handler. NOT used by find_interchange_trips'
+    leg-2 anchoring — see find_direct_trips' docstring for why that has to
+    stay untouched."""
+    buffer_minutes = _dominance_fetch_buffer_minutes(window_minutes)
+    rows = _fetch_direct_trip_rows(conn, origin, destination, date, window_start, window_minutes + buffer_minutes)
+
+    def key(pair: tuple[sqlite3.Row, dt.date]) -> tuple[int, int, int]:
+        return _row_departure_arrival_secs(pair[0], pair[1], date) + (0,)
+
+    survivors = _drop_dominated(rows, key)
+
+    window_end_secs = _time_to_seconds(window_start) + window_minutes * 60
+    trimmed = [pair for pair in survivors if key(pair)[0] < window_end_secs]
+
+    return [_build_direct_trip(conn, row, bucket_date, date) for row, bucket_date in trimmed]
 
 
 def find_interchange_trips(
@@ -607,12 +692,28 @@ def find_journeys(
     `direct_only=True` skips the interchange search entirely (not just
     filtering interchange results back out afterward) — also avoids the
     per-leg1-candidate leg2 queries in find_interchange_trips, which are the
-    most expensive part of this function."""
-    direct_trips = find_direct_trips(conn, origin, destination, date, window_start, window_minutes)
+    most expensive part of this function.
+
+    Both legs are fetched over a widened window and dominance-filtered
+    together as one merged set, then trimmed back down to the real display
+    window at the very end — not before the merge (GitHub issue #19's
+    window-boundary follow-up). A direct trip departing just after the
+    display window can legitimately dominate an in-window interchange
+    journey on change-count alone (_dominates only requires
+    `a_changes <= b_changes`), so trimming either leg's fetch before this
+    merge would let that interchange survive when it shouldn't. Widening
+    find_interchange_trips' own leg-1 fetch this way is safe: it only
+    affects the leg-1 departure window, not leg 2's MCT-bounded connection
+    search, which find_interchange_trips anchors independently off each
+    leg-1 candidate's actual arrival time."""
+    buffer_minutes = _dominance_fetch_buffer_minutes(window_minutes)
+    fetch_window_minutes = window_minutes + buffer_minutes
+
+    direct_trips = find_direct_trips(conn, origin, destination, date, window_start, fetch_window_minutes)
     interchange_trips = (
         []
         if direct_only
-        else find_interchange_trips(conn, origin, destination, date, window_start, window_minutes)
+        else find_interchange_trips(conn, origin, destination, date, window_start, fetch_window_minutes)
     )
 
     journeys = [
@@ -639,6 +740,10 @@ def find_journeys(
         for i in interchange_trips
     ]
     journeys = _drop_dominated_journeys(journeys)
+
+    window_end_secs = _time_to_seconds(window_start) + window_minutes * 60
+    journeys = [j for j in journeys if _absolute_seconds(j.departure_time, j.departure_next_day) < window_end_secs]
+
     journeys.sort(key=lambda j: (_absolute_minutes(j.departure_time, j.departure_next_day), j.duration_minutes))
     return journeys
 
@@ -713,11 +818,28 @@ def _drop_dominated_journeys(journeys: list[Journey]) -> list[Journey]:
     slow (multi-second) on a wide, mostly-non-dominated result set;
     precomputed plain-int comparisons don't (~0.2s at ~7000 candidates,
     measured against the real feed)."""
-    keys = [
-        (_absolute_seconds(j.departure_time, j.departure_next_day), _absolute_seconds(j.arrival_time, j.arrival_next_day), _num_changes(j))
-        for j in journeys
-    ]
-    return [j for i, j in enumerate(journeys) if not any(_dominates(keys[k], keys[i]) for k in range(len(journeys)) if k != i)]
+    return _drop_dominated(
+        journeys,
+        lambda j: (
+            _absolute_seconds(j.departure_time, j.departure_next_day),
+            _absolute_seconds(j.arrival_time, j.arrival_next_day),
+            _num_changes(j),
+        ),
+    )
+
+
+T = TypeVar("T")
+
+
+def _drop_dominated(items: list[T], key_fn: Callable[[T], tuple[int, int, int]]) -> list[T]:
+    """Generic Pareto filter shared by _drop_dominated_journeys (num_changes
+    varies per journey, via _num_changes' deliberate raise-on-unknown-kind)
+    and dominant_direct_trips (num_changes fixed at 0 for every candidate,
+    since they're all direct) — same O(n^2) all-pairs comparison, keyed by a
+    caller-supplied `(departure_secs, arrival_secs, num_changes)` tuple per
+    item."""
+    keys = [key_fn(item) for item in items]
+    return [item for i, item in enumerate(items) if not any(_dominates(keys[k], keys[i]) for k in range(len(items)) if k != i)]
 
 
 def _query_leg1_candidates(
@@ -808,14 +930,21 @@ def _day_buckets(date: dt.date, window_start_secs: int, window_end_secs: int) ->
     seconds bounds to search each one's own local (0, 24h+) raw-seconds
     storage. Always includes `date` itself (offset 0) and `date - 1`
     (offset +86400, to catch its >=24:00:00 post-midnight continuation
-    landing inside today's window). Also includes `date + 1` (offset
-    -86400) when the window itself extends past physical midnight — those
-    early trips are plain, normally-tagged `date + 1` services, not
-    `date`'s own >=24:00:00 notation, so they're invisible without this
-    third bucket (see module docstring)."""
+    landing inside today's window). Also includes as many forward days
+    (`date + 1`, `date + 2`, ...) as `window_end_secs` actually reaches —
+    those early trips are plain, normally-tagged following-day services, not
+    `date`'s own >=24:00:00 notation, so they're invisible without a forward
+    bucket for each day the window spans (see module docstring). A plain
+    query window never needs more than one forward day, but a dominance
+    fetch widened past the display window (GitHub issue #19) can, e.g. a
+    24h /api/direct window starting late in the evening plus the dominance
+    buffer — generalized to N days rather than hardcoding a single forward
+    bucket so that case isn't silently missed."""
     buckets = [(date, 0), (date - dt.timedelta(days=1), SECONDS_PER_DAY)]
-    if window_end_secs > SECONDS_PER_DAY:
-        buckets.append((date + dt.timedelta(days=1), -SECONDS_PER_DAY))
+    forward_days = max(0, (window_end_secs - 1) // SECONDS_PER_DAY)
+    buckets.extend(
+        (date + dt.timedelta(days=n), -n * SECONDS_PER_DAY) for n in range(1, forward_days + 1)
+    )
     return buckets
 
 

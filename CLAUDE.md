@@ -38,11 +38,16 @@ Interactive OpenAPI docs are always available at `/docs` on whichever base URL i
   only**. Journeys needing 2+ changes are not found or returned (planned as a future phase,
   not yet built) — if a query returns few/no journeys, that may be scope, not absence of
   service.
-- `/api/journeys` applies Pareto-dominance filtering: a journey is dropped if another
-  candidate departs no later, arrives no earlier, and needs no more changes, with at least
-  one of those strictly better. This means the result list is not "every scheduled service"
-  (unlike a typical human journey planner) — it's already been pruned to non-dominated
-  options. `/api/direct` does not filter — it returns every direct trip in the window.
+- Both `/api/journeys` and, as of 2026-08-02 (issue #19), `/api/direct` by default apply
+  Pareto-dominance filtering: a trip/journey is dropped if another candidate departs no
+  later, arrives no earlier, and needs no more changes, with at least one of those strictly
+  better. This means the result list is not "every scheduled service" (unlike a typical
+  human journey planner) — it's already been pruned to non-dominated options. `/api/direct`
+  accepts `include_dominated=true` to opt out and get every scheduled trip in the window,
+  unfiltered (its old, pre-issue-#19 default). Filtering is computed against a window
+  slightly wider than the requested one, then trimmed back to it, so a faster trip departing
+  just outside the requested window can still correctly dominate a slower one inside it —
+  invisible to callers except as somewhat higher latency on wide windows.
 
 ## Known data gaps in the TravelWhiz feed
 
@@ -86,7 +91,16 @@ Query params:
 | `to`              | str  | yes      | 3-letter CRS code                                   |
 | `date`            | date | yes      | `YYYY-MM-DD`                                        |
 | `time`            | time | yes      | `HH:MM` (window start, London local time)           |
-| `window_minutes`  | int  | no       | default 60, range 1–1440 (24h)                      |
+| `window_minutes`  | int  | no       | default 60, range 1–1440 (24h) for `include_dominated=true`; **1–180 when filtered (the default)** — see below |
+| `include_dominated` | bool | no    | default `false`; if `true`, skips Pareto-dominance filtering and returns every trip in the window, including ones no rider would prefer over another trip in the same response (matches this endpoint's pre-2026-08-02/issue-#19 behavior) |
+
+The larger 24h `window_minutes` cap only applies with `include_dominated=true` (a genuinely
+O(n) plain range scan regardless of window size). The default, filtered path now runs the
+same O(n²) dominance pass `/api/journeys` does, over a similarly widened fetch (see
+`dominant_direct_trips` in `app/queries.py`), so it's capped the same way:
+`window_minutes` over `MAX_DOMINATED_DIRECT_WINDOW_MINUTES` (180, `app/config.py`) with
+filtering still on returns `400`. Pass `include_dominated=true` to use a window above 180
+minutes.
 
 Returns `DirectJourneyResponse`:
 
@@ -97,6 +111,7 @@ Returns `DirectJourneyResponse`:
   "date": "2026-08-17",
   "window_start": "09:00",
   "window_minutes": 60,
+  "filter_dominated": true,
   "trips": [DirectTripOut, ...]
 }
 ```
@@ -200,6 +215,7 @@ class DirectJourneyResponse:
     date: str
     window_start: str
     window_minutes: int
+    filter_dominated: bool  # true unless the request set include_dominated=true — see API field changes below
     trips: list[DirectTripOut]
 
 class JourneysResponse:
@@ -214,6 +230,22 @@ class JourneysResponse:
 
 ## API field changes
 
+- **2026-08-02 (issue #19): `/api/direct` now applies Pareto-dominance filtering by
+  default**, matching `/api/journeys`' existing behavior — previously it returned every
+  scheduled direct trip in the window, unfiltered, which meant the two endpoints could
+  disagree about the same physical trip set for the same query. This is a **breaking change
+  to the default response** (no deprecation window — the only known consumer,
+  `london-commuter-stations`, is what motivated the fix): a caller relying on the old
+  "every trip" behavior must now pass `include_dominated=true`. Also added
+  `DirectJourneyResponse.filter_dominated: bool`, purely additive, mirroring
+  `JourneysResponse.direct_only`'s pattern of making the response self-describing about
+  which mode produced it. **Also lowered `/api/direct`'s effective `window_minutes` cap to
+  180 whenever filtering is on** (found in code review, 2026-08-02): the filtered path now
+  does the same O(n²) dominance pass over a similarly widened fetch that `/api/journeys`
+  already pays for, so the 24h cap's original "plain indexed range scan regardless of window
+  size" justification (see `app/config.py`) no longer holds for it — a request over 180
+  minutes with filtering still on now `400`s rather than risking a slow, unbounded scan;
+  `include_dominated=true` keeps the full 24h cap, since that path is still genuinely O(n).
 - **2026-08-01: `operator` (real train-operating company, from GTFS `agency.txt`) and
   `route_description` (route pattern text, e.g. "Alton - London Waterloo via Wimbledon")
   were renamed from `agency_name`/`operator` respectively** — the old names had it backwards
@@ -241,7 +273,7 @@ All error responses use FastAPI's default `{"detail": "..."}` shape (see `ErrorR
 
 | status | cause                                                                  |
 |--------|--------------------------------------------------------------------------|
-| 400    | unknown CRS code, same origin/destination, or date out of the feed's covered range (past dates/times within the feed's range are allowed — see `is_past` above, not an error) |
+| 400    | unknown CRS code, same origin/destination, date out of the feed's covered range (past dates/times within the feed's range are allowed — see `is_past` above, not an error), or `/api/direct`'s `window_minutes` over 180 without `include_dominated=true` (see `/api/direct`'s own section above) |
 | 422    | request validation failure (e.g. malformed date/time, `from`/`to` not exactly 3 chars) — standard FastAPI shape, not the custom one below |
 | 503    | GTFS dataset not loaded yet (cold start) — retry shortly              |
 
