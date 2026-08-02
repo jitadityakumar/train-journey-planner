@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from app import validation
+from app import config, validation
 from app.main import _next_quarter_hour, format_duration
 
 
@@ -258,6 +258,88 @@ def test_api_journeys_golden_interchange(client):
         j["kind"] == "interchange" and j["interchange"]["leg1"]["departure_time"] == "09:06:00"
         for j in body["journeys"]
     ), "09:06:00's change is dominated by 09:11:30's identical-arrival connection and should be filtered out"
+
+
+def test_api_direct_defaults_to_dominance_filtered_matching_journeys_direct_only(client):
+    """GitHub issue #19: /api/direct now applies the same Pareto-dominance
+    filtering /api/journeys already does, by default. Also checks the
+    include_dominated opt-out restores the old, unfiltered trip count."""
+    filtered = client.get(
+        "/api/direct", params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00"}
+    ).json()
+    assert filtered["filter_dominated"] is True
+
+    direct_only_journeys = client.get(
+        "/api/journeys",
+        params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00", "direct_only": "true"},
+    ).json()
+
+    filtered_pairs = {(t["departure_time"], t["arrival_time"]) for t in filtered["trips"]}
+    journeys_pairs = {
+        (j["direct"]["departure_time"], j["direct"]["arrival_time"]) for j in direct_only_journeys["journeys"]
+    }
+    assert filtered_pairs, "expected at least one surviving direct trip for this golden-path route"
+    assert filtered_pairs == journeys_pairs, (
+        "/api/direct's filtered default and /api/journeys?direct_only=true must agree on "
+        "the same physical trip set"
+    )
+
+    unfiltered = client.get(
+        "/api/direct",
+        params={
+            "from": "BNS",
+            "to": "WAT",
+            "date": "2026-08-17",
+            "time": "09:00",
+            "include_dominated": "true",
+        },
+    ).json()
+    assert unfiltered["filter_dominated"] is False
+    assert len(unfiltered["trips"]) > len(filtered["trips"]), (
+        "the include_dominated opt-out should restore trips the default, filtered "
+        "response drops"
+    )
+
+
+def test_api_direct_large_window_requires_opting_out_of_dominance_filtering(client):
+    """Filtering now runs the same O(n^2) dominance pass /api/journeys does,
+    over a similarly widened fetch (GitHub issue #19 code review) — so a
+    window beyond MAX_DOMINATED_DIRECT_WINDOW_MINUTES no longer qualifies
+    for /api/direct's generous 24h cap unless the caller opts out of
+    filtering (include_dominated=true), which stays a genuinely O(n) scan."""
+    over_cap = config.MAX_DOMINATED_DIRECT_WINDOW_MINUTES + 1
+
+    filtered_over_cap = client.get(
+        "/api/direct",
+        params={"from": "BNS", "to": "WAT", "date": "2026-08-17", "time": "09:00", "window_minutes": over_cap},
+    )
+    assert filtered_over_cap.status_code == 400
+    assert "include_dominated=true" in filtered_over_cap.json()["detail"]
+
+    unfiltered_over_cap = client.get(
+        "/api/direct",
+        params={
+            "from": "BNS",
+            "to": "WAT",
+            "date": "2026-08-17",
+            "time": "09:00",
+            "window_minutes": over_cap,
+            "include_dominated": "true",
+        },
+    )
+    assert unfiltered_over_cap.status_code == 200
+
+    at_cap = client.get(
+        "/api/direct",
+        params={
+            "from": "BNS",
+            "to": "WAT",
+            "date": "2026-08-17",
+            "time": "09:00",
+            "window_minutes": config.MAX_DOMINATED_DIRECT_WINDOW_MINUTES,
+        },
+    )
+    assert at_cap.status_code == 200, "the cap itself should still be filterable, not just one under it"
 
 
 def test_api_journeys_direct_only_excludes_interchange_and_defaults_false(client):

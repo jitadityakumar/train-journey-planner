@@ -63,6 +63,10 @@ class DirectJourneyResponse(BaseModel):
     date: str
     window_start: str
     window_minutes: int
+    # Mirrors JourneysResponse.direct_only's pattern: makes the response
+    # self-describing about which mode produced it (see GitHub issue #19 —
+    # dominance filtering is applied by default as of that issue).
+    filter_dominated: bool
     trips: list[DirectTripOut]
 
 

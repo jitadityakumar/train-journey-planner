@@ -178,9 +178,11 @@ def _run_direct_query(
     date: dt.date,
     time: dt.time,
     window_minutes: int,
+    filter_dominated: bool = True,
 ) -> DirectJourneyResponse:
     origin, destination = _validate_or_400(conn, from_crs, to_crs, date, time)
-    trips = queries.find_direct_trips(conn, origin, destination, date, time, window_minutes)
+    finder = queries.dominant_direct_trips if filter_dominated else queries.find_direct_trips
+    trips = finder(conn, origin, destination, date, time, window_minutes)
 
     return DirectJourneyResponse(
         origin=StationOut(crs_code=origin.stop_code, name=origin.stop_name),
@@ -188,6 +190,7 @@ def _run_direct_query(
         date=date.isoformat(),
         window_start=time.isoformat(timespec="minutes"),
         window_minutes=window_minutes,
+        filter_dominated=filter_dominated,
         trips=[_direct_trip_out(t, date) for t in trips],
     )
 
@@ -250,9 +253,30 @@ def api_direct(
     date: dt.date = Query(...),
     time: dt.time = Query(...),
     window_minutes: int = Query(config.DEFAULT_WINDOW_MINUTES, ge=1, le=24 * 60),
+    include_dominated: bool = Query(
+        False,
+        description=(
+            "If true, skip Pareto-dominance filtering and return every trip in the "
+            "window, including ones no rider would ever prefer over another trip in "
+            "the same response (matches this endpoint's pre-issue-#19 behavior)."
+        ),
+    ),
     conn: sqlite3.Connection = Depends(get_db),
 ):
-    return _run_direct_query(conn, from_, to, date, time, window_minutes)
+    """Direct trips only. Dominance-filtered by default (as of GitHub issue
+    #19) — pass include_dominated=true to opt out and get every scheduled
+    trip in the window, unfiltered."""
+    filter_dominated = not include_dominated
+    if filter_dominated and window_minutes > config.MAX_DOMINATED_DIRECT_WINDOW_MINUTES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"window_minutes over {config.MAX_DOMINATED_DIRECT_WINDOW_MINUTES} requires "
+                "include_dominated=true — dominance filtering's cost no longer qualifies for "
+                "the larger unfiltered window cap (see GitHub issue #19)."
+            ),
+        )
+    return _run_direct_query(conn, from_, to, date, time, window_minutes, filter_dominated=filter_dominated)
 
 
 @app.get("/api/journeys", response_model=JourneysResponse)

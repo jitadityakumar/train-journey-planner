@@ -14,12 +14,22 @@ REFRESH_HOUR = int(os.environ.get("REFRESH_HOUR", "4"))
 REFRESH_MINUTE = int(os.environ.get("REFRESH_MINUTE", "0"))
 
 DEFAULT_WINDOW_MINUTES = 60
-# /api/direct is a plain indexed range scan regardless of window size, so it
-# keeps the generous 24h cap. /api/journeys and /results additionally do one
-# leg-2 query per leg-1 candidate (see queries.find_interchange_trips) — an
-# unbounded window there risks a very slow request and exhausting uvicorn's
-# threadpool under concurrent load; found in code review, 2026-08-01.
+# /api/direct's raw scan (include_dominated=true) is a plain indexed range
+# scan regardless of window size, so that path keeps the generous 24h cap
+# below. /api/journeys and /results additionally do one leg-2 query per
+# leg-1 candidate (see queries.find_interchange_trips) — an unbounded window
+# there risks a very slow request and exhausting uvicorn's threadpool under
+# concurrent load; found in code review, 2026-08-01.
 MAX_JOURNEYS_WINDOW_MINUTES = 180
+# /api/direct's *filtered* (default) path no longer qualifies for the 24h
+# cap above: as of GitHub issue #19, it runs the same O(n^2)
+# _drop_dominated pass /api/journeys does, over a similarly widened fetch
+# (see queries.dominant_direct_trips) — so it inherits the same cost
+# rationale and gets the same cap, enforced explicitly in app/main.py since
+# FastAPI's Query(le=...) can't vary by another parameter's value. Only
+# include_dominated=true (the old, unfiltered, genuinely O(n) behavior)
+# keeps the 24h cap.
+MAX_DOMINATED_DIRECT_WINDOW_MINUTES = MAX_JOURNEYS_WINDOW_MINUTES
 MIN_CONNECTION_TIME_MINUTES = 5
 # Cap on how long a wait at the interchange is worth showing — an interchange
 # journey with a 3-hour layover isn't a useful "1 change" result even though
@@ -80,3 +90,16 @@ STATION_ALIASES: dict[str, tuple[str, ...]] = {
     "PAD": ("PDX",),  # London Paddington <- Paddington (Elizabeth line)
     "LST": ("LSX",),  # London Liverpool Street <- Liverpool Street (Elizabeth line)
 }
+
+# Buffer added to the requested display window when fetching dominance-
+# filtering candidates (GitHub issue #19's window-boundary follow-up): a
+# faster trip departing just after the display window can still legitimately
+# dominate a slower one inside it, so the fetch has to look a bit further
+# than what actually gets shown. A flat proportion of window_minutes doesn't
+# work well across this app's range of window sizes — /api/direct's cap is
+# 24h, so a flat proportion would fetch enormously more than needed at the
+# high end while being nearly useless for a small window at the low end —
+# hence a floor-and-cap heuristic instead. Starting values, not yet
+# empirically tuned against the real feed.
+DOMINANCE_FETCH_BUFFER_MIN_MINUTES = 60
+DOMINANCE_FETCH_BUFFER_MAX_MINUTES = 120
