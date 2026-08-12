@@ -13,3 +13,9 @@ data/
 
 .env
 .DS_Store
+
+# OTP sidecar (otp-sidecar/) runtime state and deploy secrets — never committed
+otp-sidecar/upstream.env
+otp-sidecar/.env
+otp-sidecar/graphs/
+.env.deploy

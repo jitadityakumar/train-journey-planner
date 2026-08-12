@@ -5,9 +5,24 @@ services:
     ports:
       - "8010:8000"
     volumes:
-      - gtfs-data:/app/data
+      # Bind mount, not a named volume (changed for GitHub issue #26): the
+      # OTP sidecar on jk-server-ccu pulls gtfs.zip/gtfs.zip.sha256 out of
+      # this directory over SSH (see otp-sidecar/poll_and_build.sh) — a
+      # named volume lives under /var/lib/docker, root-owned, unreachable by
+      # a normal SSH user. ./data is already gitignored (see .gitignore).
+      # One-time migration note: if upgrading from the old named-volume
+      # setup, copy its contents into ./data before the first `up` with this
+      # compose file (e.g. `docker run --rm -v train-journey-planner_gtfs-data:/from
+      # -v $(pwd)/data:/to alpine cp -a /from/. /to/`), or just let it
+      # cold-start-rebuild (fetches the feed fresh, no manual copy needed).
+      - ./data:/app/data
     environment:
       - DATA_DIR=/app/data
+      # OTP sidecar (GitHub issue #26) — empty/unset means the multi-change
+      # tier stays permanently degraded (safe default, not an error). Set in
+      # a repo-root .env file (gitignored, auto-read by `docker compose`),
+      # e.g. OTP_SIDECAR_URL=http://<jk-server-ccu-tailscale-ip>:8080
+      - OTP_SIDECAR_URL=${OTP_SIDECAR_URL:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 30s
@@ -19,6 +34,3 @@ services:
       options:
         max-size: "5m"
         max-file: "7"
-
-volumes:
-  gtfs-data:

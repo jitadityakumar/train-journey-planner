@@ -67,9 +67,20 @@
           </div>
         {% endif %}
       {% endfor %}
+    {% elif direct_only %}
+      <div class="no-results">No direct trains found in this window.</div>
     {% else %}
-      <div class="no-results">
-        {% if direct_only %}No direct trains found in this window.{% else %}No direct or single-change trains found in this window.{% endif %}
+      <!-- Two-stage UI (GitHub issue #26): first pass found nothing, so
+           either search the OTP sidecar for a 2-5 change journey, or — if
+           it's already known to be down — skip straight to the degraded
+           banner. Never blended with the first-pass results above (decision
+           #1 in OTP_SIDECAR_PLAN.md), and this whole block only exists
+           because result.journeys was empty. -->
+      <div id="multi-change-root"
+           data-from="{{ from_ }}" data-to="{{ to }}" data-date="{{ date }}"
+           data-time="{{ time }}" data-window-minutes="{{ result.window_minutes }}"
+           data-sidecar-healthy="{{ result.sidecar_healthy|tojson }}">
+        <div class="no-results">No direct or single-change trains found in this window.</div>
       </div>
     {% endif %}
   {% endif %}
@@ -79,5 +90,11 @@
       <a class="window-nav-link" href="{{ prev_url }}">&larr; Previous</a>
       <a class="window-nav-link" href="{{ next_url }}">Next &rarr;</a>
     </div>
+  {% endif %}
+{% endblock %}
+
+{% block scripts %}
+  {% if result and not result.journeys and not direct_only %}
+    <script src="{{ url_for('static', path='multi_change.js') }}" defer></script>
   {% endif %}
 {% endblock %}

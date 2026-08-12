@@ -34,10 +34,14 @@ Interactive OpenAPI docs are always available at `/docs` on whichever base URL i
   (that's `rail-disruption-monitor`'s job) and no real per-station minimum connection time
   (interchange journeys use a flat 5-minute MCT, capped at a 90-minute layover — see
   `MIN_CONNECTION_TIME_MINUTES`/`MAX_CONNECTION_TIME_MINUTES` in `app/config.py`).
-- Routing currently covers **direct journeys and single-interchange (1 change) journeys
-  only**. Journeys needing 2+ changes are not found or returned (planned as a future phase,
-  not yet built) — if a query returns few/no journeys, that may be scope, not absence of
-  service.
+- Routing covers **direct journeys and single-interchange (1 change) journeys** natively via
+  `/api/direct`/`/api/journeys` (own SQLite GTFS index). As of GitHub issue #26, a **separate
+  2-5 change fallback tier** exists at `GET /api/journeys/multi-change`, backed by an
+  OpenTripPlanner sidecar rather than this app's own index — it's a distinct endpoint, not
+  merged into `/api/journeys`' response, and callers must call it explicitly (see that
+  endpoint's own section below for when it's meaningful to). It's a genuinely separate tier
+  (own health-gated availability, own weaker degradation guarantees), not just "the rest of
+  the results" — don't assume `/api/journeys` alone is now complete for 2+ change queries.
 - Both `/api/journeys` and, as of 2026-08-02 (issue #19), `/api/direct` by default apply
   Pareto-dominance filtering: a trip/journey is dropped if another candidate departs no
   later, arrives no earlier, and needs no more changes, with at least one of those strictly
@@ -143,6 +147,58 @@ Returns `JourneysResponse`:
 `JourneyOut.kind` is `"direct"` or `"interchange"`; exactly one of `direct` (a `DirectTripOut`)
 / `interchange` (an `InterchangeTripOut`) is populated depending on `kind`.
 
+`JourneysResponse` also carries `sidecar_healthy: bool` (added GitHub issue #26) — whether the
+OTP sidecar passed its last background health check (checked every
+`OTP_HEALTH_CHECK_INTERVAL_MINUTES`, default 2 min; see `app/otp_client.py`). This is about
+whether calling `/api/journeys/multi-change` is currently worthwhile, not about `/api/journeys`
+itself, which never touches the sidecar.
+
+### `GET /api/journeys/multi-change` — 2-5 change fallback tier (OTP sidecar-backed)
+
+Added GitHub issue #26. Meant to be called only as a second stage, after `/api/journeys`
+comes back with zero results — this app's own UI (`/results`) follows exactly that pattern:
+render the direct/1-change search first, and only fetch this endpoint client-side if that
+came back empty (see `app/static/multi_change.js`). Calling it unconditionally works but
+wastes a network round-trip to a separate host (jk-server-ccu) for journeys that
+`/api/journeys` would already have found more cheaply.
+
+Same `from`/`to`/`date`/`time`/`window_minutes` params as `/api/journeys` (no `direct_only` —
+this tier is inherently multi-change). Routing itself is delegated to an OpenTripPlanner
+instance running as a separate network service (`otp-sidecar/`, deployed to `jk-server-ccu`,
+reached over Tailscale) — this app's own SQLite GTFS index is only used for the
+origin/destination CRS-code lookup, not the route search.
+
+**Never hard-fails.** If the sidecar is down, unreachable, or errors, this returns `200` with
+`sidecar_healthy: false` and `journeys: []` rather than a `4xx`/`5xx` — callers should treat
+that as "deeper search temporarily unavailable", not an error to retry aggressively.
+
+Returns `MultiChangeJourneysResponse`:
+
+```json
+{
+  "origin": {"crs_code": "BNS", "name": "Barnes"},
+  "destination": {"crs_code": "PUL", "name": "Pulborough"},
+  "date": "2026-08-17",
+  "window_start": "09:00",
+  "window_minutes": 60,
+  "sidecar_healthy": true,
+  "journeys": [MultiChangeJourneyOut, ...]
+}
+```
+
+`MultiChangeJourneyOut.legs` is a `list[MultiChangeLegOut]` of length `num_changes + 1` (3 to
+6 legs for the 2-5 change range this tier targets — a floor of 2 changes is enforced
+explicitly in `plan_multi_change_journeys`, since OTP's own routing model can legitimately
+surface a 0/1-change itinerary the SQL search missed, which would misrepresent this tier if
+shown; the ceiling comes from `OTP_MAXIMUM_TRANSFERS` — see `app/config.py`). Unlike
+`DirectTripOut`, `MultiChangeLegOut` has no `trip_id`,
+`intermediate_stops`, or `reverses_at` — those aren't sourced from this app's own GTFS index
+for this tier and weren't included in the first version (see `OTP_SIDECAR_PLAN.md` in the
+sibling `local-apps/train-journey-planner-gtfs` context directory for the full design).
+Results in this tier are **not** Pareto-filtered against `/api/journeys`' own direct/
+interchange results — the two tiers are never merged or compared against each other, only
+shown one at a time in the UI (first pass, or this tier if the first pass was empty).
+
 ### `GET /api/stations` — full station list
 
 No query params. Returns `list[StationOut]` — every station in the currently-loaded feed
@@ -226,10 +282,49 @@ class JourneysResponse:
     window_minutes: int
     direct_only: bool
     journeys: list[JourneyOut]
+    sidecar_healthy: bool  # added issue #26 — whether /api/journeys/multi-change is currently worth calling
+
+class MultiChangeLegOut:               # added issue #26 — a single leg within a MultiChangeJourneyOut
+    origin: StationOut
+    destination: StationOut
+    operator: str | None
+    operator_code: str | None
+    route_description: str | None
+    headsign: str | None
+    departure_time: str
+    arrival_time: str
+    departure_next_day: bool
+    arrival_next_day: bool
+    duration_minutes: int
+
+class MultiChangeJourneyOut:           # added issue #26
+    legs: list[MultiChangeLegOut]      # length == num_changes + 1
+    departure_time: str
+    departure_next_day: bool
+    arrival_time: str
+    arrival_next_day: bool
+    duration_minutes: int
+    num_changes: int
+    is_past: bool
+
+class MultiChangeJourneysResponse:     # added issue #26 — GET /api/journeys/multi-change's response
+    origin: StationOut
+    destination: StationOut
+    date: str
+    window_start: str
+    window_minutes: int
+    sidecar_healthy: bool              # false means journeys is unconditionally [] — sidecar down/erroring, not "genuinely no journeys"
+    journeys: list[MultiChangeJourneyOut]
 ```
 
 ## API field changes
 
+- **2026-08-12 (issue #26): added `GET /api/journeys/multi-change`, `JourneysResponse.sidecar_healthy`,
+  and the OTP-sidecar dependency described above.** Purely additive — no existing endpoint or
+  field changed shape. The new endpoint depends on a separately-deployed OTP sidecar
+  (`otp-sidecar/`, `jk-server-ccu`) being reachable and healthy; when it isn't, the endpoint
+  degrades (see its own section) rather than erroring, so a caller polling it doesn't need
+  special-case error handling for "sidecar down", only for checking `sidecar_healthy`.
 - **2026-08-02 (issue #19): `/api/direct` now applies Pareto-dominance filtering by
   default**, matching `/api/journeys`' existing behavior — previously it returned every
   scheduled direct trip in the window, unfiltered, which meant the two endpoints could
@@ -289,6 +384,8 @@ curl "http://localhost:8000/api/direct?from=BNS&to=WAT&date=2026-08-17&time=09:0
 curl "http://localhost:8000/api/journeys?from=BNS&to=LRD&date=2026-08-17&time=09:00&window_minutes=90"
 
 curl "http://localhost:8000/api/journeys?from=BNS&to=WAT&date=2026-08-17&time=09:00&direct_only=true"
+
+curl "http://localhost:8000/api/journeys/multi-change?from=BNS&to=PUL&date=2026-08-17&time=09:00"
 
 curl "http://localhost:8000/api/stations"
 ```

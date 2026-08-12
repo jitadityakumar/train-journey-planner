@@ -3,6 +3,12 @@ from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "data"))
 GTFS_DB_PATH = DATA_DIR / "gtfs.db"
+# Persisted after every successful refresh (see app/refresh.py) so the OTP
+# sidecar on jk-server-ccu can pull a byte-identical copy of the same feed
+# this app built its DB from, rather than fetching independently and risking
+# version skew — see OTP_SIDECAR_PLAN.md "Refresh trigger design" (issue #26).
+GTFS_ZIP_PATH = DATA_DIR / "gtfs.zip"
+GTFS_ZIP_CHECKSUM_PATH = DATA_DIR / "gtfs.zip.sha256"
 GTFS_DOWNLOAD_URL = os.environ.get(
     "GTFS_DOWNLOAD_URL",
     "https://storage.travelwhiz.app/generated-gtfs/gb-nationalrail.gtfs.zip",
@@ -124,3 +130,47 @@ MAX_CONCURRENT_DB_REQUESTS = int(os.environ.get("MAX_CONCURRENT_DB_REQUESTS", "4
 # with a 503 rather than queueing indefinitely (see the middleware) —
 # unbounded waiting is just unbounded latency wearing a different hat.
 DB_REQUEST_ACQUIRE_TIMEOUT_SECONDS = int(os.environ.get("DB_REQUEST_ACQUIRE_TIMEOUT_SECONDS", "5"))
+
+# GitHub issue #26: OTP sidecar (otp-sidecar/, deployed to jk-server-ccu) for
+# the 2-5 change fallback search, only called when the direct/1-change SQL
+# search finds nothing. Reached over Tailscale — no public exposure, see
+# otp-sidecar/docker-compose.prod.yml. Empty by default so the health check
+# fails closed (degraded mode) rather than pointing at localhost, until an
+# operator sets it explicitly.
+OTP_SIDECAR_URL = os.environ.get("OTP_SIDECAR_URL", "")
+OTP_GRAPHQL_PATH = "/otp/gtfs/v1"
+OTP_HEALTH_PATH = "/otp/actuators/health"
+# GTFS feed ID as loaded into the sidecar's own OTP graph build — prefixes
+# every OTP stop/agency gtfsId (e.g. "1:CLJ000"). Confirmed "1" via the
+# 2026-08-12 spike (see OTP_SIDECAR_PLAN.md); revisit if the sidecar's build
+# config ever assigns a different feed ID.
+OTP_FEED_ID = os.environ.get("OTP_FEED_ID", "1")
+# Verified empirically against the real BNS->PUL 3-leg case (spike,
+# 2026-08-12): 1 correctly finds nothing, 5 correctly finds it. See
+# OTP_SIDECAR_PLAN.md's "Round-cap parameter" spike finding.
+OTP_MAXIMUM_TRANSFERS = int(os.environ.get("OTP_MAXIMUM_TRANSFERS", "5"))
+OTP_REQUEST_TIMEOUT_SECONDS = float(os.environ.get("OTP_REQUEST_TIMEOUT_SECONDS", "10"))
+OTP_HEALTH_CHECK_TIMEOUT_SECONDS = float(os.environ.get("OTP_HEALTH_CHECK_TIMEOUT_SECONDS", "5"))
+# Bounds how many /api/journeys/multi-change requests can be waiting on the
+# sidecar at once (found in Opus review, 2026-08-12: nothing bounded this
+# before, unlike GitHub issue #20's MAX_CONCURRENT_DB_REQUESTS for the
+# SQLite-backed endpoints — a request here can hold a Starlette threadpool
+# thread for up to OTP_REQUEST_TIMEOUT_SECONDS, and the spike measured the
+# sidecar itself at only 1.8-1.9GB under a single load test, not stress-
+# tested for many concurrent GraphQL calls). Separate from
+# MAX_CONCURRENT_DB_REQUESTS deliberately — this endpoint's cost is the
+# external sidecar call, not SQLite (see app/main.py's _DB_ROUTE_PATHS
+# comment), so it needs its own budget, not a share of that one.
+OTP_MAX_CONCURRENT_SIDECAR_REQUESTS = int(os.environ.get("OTP_MAX_CONCURRENT_SIDECAR_REQUESTS", "4"))
+# How long a request waits for a free sidecar-concurrency slot before
+# degrading (sidecar_healthy: false, empty journeys) rather than queueing —
+# short on purpose: if the cap's already saturated, waiting the full
+# OTP_REQUEST_TIMEOUT_SECONDS just to *start* a request compounds latency
+# for no benefit, and this tier never hard-fails regardless (see
+# OTP_SIDECAR_PLAN.md decision #2).
+OTP_SIDECAR_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS = float(
+    os.environ.get("OTP_SIDECAR_CONCURRENCY_ACQUIRE_TIMEOUT_SECONDS", "3")
+)
+# How often the background health-check job (app/otp_client.py) polls the
+# sidecar's actuator endpoint to refresh the in-process healthy/degraded flag.
+OTP_HEALTH_CHECK_INTERVAL_MINUTES = int(os.environ.get("OTP_HEALTH_CHECK_INTERVAL_MINUTES", "2"))

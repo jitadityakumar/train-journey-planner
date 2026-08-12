@@ -20,6 +20,7 @@ independent schedulers racing to refresh the same files.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import sqlite3
@@ -62,11 +63,31 @@ class FeedValidationError(RuntimeError):
 
 
 def refresh_if_missing() -> None:
+    _cleanup_stale_tmp_files()
     if config.GTFS_DB_PATH.exists():
         logger.info("GTFS dataset already present at %s — skipping startup fetch", config.GTFS_DB_PATH)
         return
     logger.warning("No GTFS dataset found at %s — fetching immediately instead of waiting for the next scheduled refresh", config.GTFS_DB_PATH)
     refresh_dataset()
+
+
+def _cleanup_stale_tmp_files() -> None:
+    """Removes any `.gtfs.db.*.tmp`/`.gtfs.zip.*.tmp`/`.gtfs.zip.sha256.*.tmp`
+    left behind by a refresh that was interrupted mid-write (container kill,
+    host reboot) before its final os.replace — these are otherwise never
+    cleaned up, and accumulate indefinitely across repeated crash-restarts
+    (found in Opus review, 2026-08-12; `gtfs.zip`'s ~83MB per leftover file
+    is a meaningfully bigger leak than the pre-issue-#26 `gtfs.db` case
+    alone). Only called once, at process startup — a refresh in progress
+    concurrently with this call isn't a real scenario this app has (see this
+    module's own docstring: one BackgroundScheduler per process, one
+    refresh_if_missing() call at lifespan startup)."""
+    if not config.DATA_DIR.exists():
+        return
+    for pattern in (".gtfs.db.*.tmp", ".gtfs.zip.*.tmp", ".gtfs.zip.sha256.*.tmp"):
+        for stale in config.DATA_DIR.glob(pattern):
+            logger.warning("Removing stale temp file from an interrupted refresh: %s", stale)
+            stale.unlink(missing_ok=True)
 
 
 def start_scheduler() -> BackgroundScheduler:
@@ -93,9 +114,15 @@ def refresh_dataset() -> None:
     os.close(tmp_fd)
     tmp_db_path = Path(tmp_name)
 
+    # Downloaded into DATA_DIR (not the system tempdir) so it's on the same
+    # filesystem as GTFS_ZIP_PATH, keeping the final persist step below a
+    # true atomic os.replace rather than a cross-filesystem copy.
+    zip_fd, zip_name = tempfile.mkstemp(dir=config.DATA_DIR, prefix=".gtfs.zip.", suffix=".tmp")
+    os.close(zip_fd)
+    zip_path = Path(zip_name)
+
     with tempfile.TemporaryDirectory(prefix="gtfs-refresh-") as tmp:
         tmp_path = Path(tmp)
-        zip_path = tmp_path / "feed.zip"
         extract_dir = tmp_path / "extracted"
 
         try:
@@ -106,10 +133,46 @@ def refresh_dataset() -> None:
         except Exception:
             logger.exception("GTFS refresh failed — keeping existing dataset (if any) unchanged")
             tmp_db_path.unlink(missing_ok=True)
+            zip_path.unlink(missing_ok=True)
             return
 
+        # The DB swap is the primary, already-validated deliverable — it must
+        # go ahead regardless of what happens to the zip/checksum below.
         os.replace(tmp_db_path, config.GTFS_DB_PATH)
         logger.info("GTFS dataset refreshed successfully at %s", config.GTFS_DB_PATH)
+
+        # Persisting the zip (for the OTP sidecar's pull-and-poll refresh,
+        # GitHub issue #26) is secondary to the DB swap above — a failure
+        # here must not look like the whole refresh failed, since the served
+        # dataset already updated successfully. Still atomic within itself
+        # (checksum written via the same mkstemp + os.replace pattern as the
+        # zip/DB, not Path.write_text directly, so a mid-write interruption
+        # can never leave a checksum file that doesn't match what's on disk)
+        # and never leaves the checksum pointing at a zip that isn't there.
+        try:
+            checksum = _sha256(zip_path)
+            os.replace(zip_path, config.GTFS_ZIP_PATH)
+            checksum_fd, checksum_name = tempfile.mkstemp(
+                dir=config.DATA_DIR, prefix=".gtfs.zip.sha256.", suffix=".tmp"
+            )
+            with os.fdopen(checksum_fd, "w") as f:
+                f.write(checksum)
+            os.replace(checksum_name, config.GTFS_ZIP_CHECKSUM_PATH)
+        except Exception:
+            logger.exception(
+                "Persisting gtfs.zip/checksum failed after a successful DB refresh — "
+                "the OTP sidecar will keep serving its last successfully-pulled feed "
+                "until this succeeds on a future refresh"
+            )
+            zip_path.unlink(missing_ok=True)
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _download(url: str, dest: Path) -> None:
