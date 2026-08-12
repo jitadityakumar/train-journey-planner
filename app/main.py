@@ -342,6 +342,15 @@ def _multi_change_leg_out(leg: otp_client.MultiChangeLeg) -> MultiChangeLegOut:
         departure_next_day=leg.departure_next_day,
         arrival_next_day=leg.arrival_next_day,
         duration_minutes=leg.duration_minutes,
+        intermediate_stops=[
+            IntermediateStopOut(
+                stop_name=s.stop_name,
+                stop_code=s.stop_code,
+                arrival_time=s.arrival_time,
+                departure_time=s.departure_time,
+            )
+            for s in leg.intermediate_stops
+        ],
     )
 
 

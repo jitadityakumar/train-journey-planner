@@ -13,6 +13,11 @@ function formatDuration(totalMinutes) {
   return `${hours}h${minutes}m`;
 }
 
+function toMinutes(timeStr, nextDay) {
+  const [h, m] = timeStr.split(":").map(Number);
+  return h * 60 + m + (nextDay ? 1440 : 0);
+}
+
 function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {
@@ -42,6 +47,19 @@ function renderLeg(leg) {
     .filter(Boolean)
     .join(" · ");
   if (metaText) parts.push(el("div", { className: "trip-meta", text: metaText }));
+  if (leg.intermediate_stops && leg.intermediate_stops.length > 0) {
+    const count = leg.intermediate_stops.length;
+    const stopList = el(
+      "ul",
+      { className: "stop-list" },
+      leg.intermediate_stops.map((stop) =>
+        el("li", { text: `${stop.arrival_time.slice(0, 5)} ${stop.stop_name} (${stop.stop_code})` })
+      )
+    );
+    parts.push(
+      el("details", {}, [el("summary", { text: `${count} intermediate stop${count === 1 ? "" : "s"}` }), stopList])
+    );
+  }
   return parts;
 }
 
@@ -53,10 +71,14 @@ function renderJourney(journey) {
   journey.legs.forEach((leg, i) => {
     children.push(...renderLeg(leg));
     if (i < journey.legs.length - 1) {
+      const nextLeg = journey.legs[i + 1];
+      const waitMinutes =
+        toMinutes(nextLeg.departure_time, nextLeg.departure_next_day) -
+        toMinutes(leg.arrival_time, leg.arrival_next_day);
       children.push(
         el("div", {
           className: "change-marker",
-          text: `change at ${leg.destination.name} (${leg.destination.crs_code})`,
+          text: `change at ${leg.destination.name} (${leg.destination.crs_code}) · ${waitMinutes} min`,
         })
       );
     }

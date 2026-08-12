@@ -29,7 +29,7 @@ import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from app import config
-from app.queries import Stop
+from app.queries import IntermediateStop, Stop
 
 logger = logging.getLogger("train_journey_planner.otp_client")
 
@@ -59,6 +59,7 @@ class MultiChangeLeg:
     # detection signal. Not consumed by the first version of this tier (see
     # OTP_SIDECAR_PLAN.md), kept for a future "no change needed" refinement.
     trip_short_name: str | None = None
+    intermediate_stops: list[IntermediateStop] = field(default_factory=list)
 
 
 @dataclass
@@ -99,6 +100,10 @@ query PlanConnection(
           agency { name gtfsId }
           route { shortName longName }
           trip { tripHeadsign tripShortName }
+          stopCalls {
+            stopLocation { ... on Stop { code name } }
+            schedule { time { ... on ArrivalDepartureTime { arrival departure } } }
+          }
         }
       }
     }
@@ -260,6 +265,28 @@ def _build_journey(legs_raw: list[dict], query_date: dt.date) -> MultiChangeJour
     )
 
 
+def _build_intermediate_stops(stop_calls: list[dict]) -> list[IntermediateStop]:
+    # stopCalls includes the leg's own origin and destination as its first
+    # and last entries (confirmed live, 2026-08-12) — only the calls between
+    # them are genuinely "intermediate", matching app/queries.py's own
+    # _intermediate_stops convention.
+    results = []
+    for call in stop_calls[1:-1]:
+        stop_location = call.get("stopLocation") or {}
+        time = (call.get("schedule") or {}).get("time") or {}
+        arrival = time.get("arrival")
+        departure = time.get("departure")
+        results.append(
+            IntermediateStop(
+                stop_name=stop_location.get("name", ""),
+                stop_code=stop_location.get("code", ""),
+                arrival_time=_to_london(arrival).strftime("%H:%M:%S") if arrival else "",
+                departure_time=_to_london(departure).strftime("%H:%M:%S") if departure else "",
+            )
+        )
+    return results
+
+
 def _build_leg(leg: dict, query_date: dt.date) -> MultiChangeLeg:
     start = _to_london(leg["start"]["scheduledTime"])
     end = _to_london(leg["end"]["scheduledTime"])
@@ -281,6 +308,7 @@ def _build_leg(leg: dict, query_date: dt.date) -> MultiChangeLeg:
         arrival_next_day=end.date() > query_date,
         duration_minutes=round((end - start).total_seconds() / 60),
         trip_short_name=trip.get("tripShortName"),
+        intermediate_stops=_build_intermediate_stops(leg.get("stopCalls") or []),
     )
 
 

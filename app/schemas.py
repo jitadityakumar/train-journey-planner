@@ -60,9 +60,11 @@ class JourneyOut(BaseModel):
 class MultiChangeLegOut(BaseModel):
     """A single leg of a 2-5 change journey from the OTP sidecar tier (see
     app/otp_client.py, GitHub issue #26). Deliberately a smaller shape than
-    DirectTripOut — no trip_id/intermediate_stops/reverses_at, since those
-    aren't sourced from this app's own GTFS index and aren't needed for a
-    first version (see OTP_SIDECAR_PLAN.md)."""
+    DirectTripOut — no trip_id/reverses_at, since those aren't sourced from
+    this app's own GTFS index and aren't needed for a first version (see
+    OTP_SIDECAR_PLAN.md). intermediate_stops IS included (from OTP's
+    stopCalls field) since the UI needs it to match the existing
+    direct/1-change display."""
 
     origin: StationOut
     destination: StationOut
@@ -75,6 +77,7 @@ class MultiChangeLegOut(BaseModel):
     departure_next_day: bool
     arrival_next_day: bool
     duration_minutes: int
+    intermediate_stops: list[IntermediateStopOut]
 
 
 class MultiChangeJourneyOut(BaseModel):

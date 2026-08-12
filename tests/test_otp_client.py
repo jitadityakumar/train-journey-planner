@@ -44,8 +44,9 @@ def _leg(
     headsign="Pulborough",
     trip_short_name="2306",
     mode="RAIL",
+    stop_calls=None,
 ) -> dict:
-    return {
+    leg = {
         "mode": mode,
         "start": {"scheduledTime": dep},
         "end": {"scheduledTime": arr},
@@ -54,6 +55,16 @@ def _leg(
         "agency": {"name": agency_name, "gtfsId": agency_gtfs_id},
         "route": {"shortName": None, "longName": route_name},
         "trip": {"tripHeadsign": headsign, "tripShortName": trip_short_name},
+    }
+    if stop_calls is not None:
+        leg["stopCalls"] = stop_calls
+    return leg
+
+
+def _stop_call(code: str, name: str, arrival: str, departure: str) -> dict:
+    return {
+        "stopLocation": {"code": code, "name": name},
+        "schedule": {"time": {"arrival": arrival, "departure": departure}},
     }
 
 
@@ -109,6 +120,41 @@ def test_plan_multi_change_journeys_maps_three_leg_response(monkeypatch):
     assert journey.legs[0].route_description == "Barnes - Pulborough"
     assert journey.legs[0].headsign == "Pulborough"
     assert journey.legs[0].trip_short_name == "2306"
+
+
+def test_plan_multi_change_journeys_maps_intermediate_stops(monkeypatch):
+    """stopCalls includes the leg's own origin/destination as its first and
+    last entries (confirmed live against the deployed sidecar, 2026-08-12) —
+    only the calls between them should map to intermediate_stops."""
+    leg_with_calls = _leg(
+        "2026-08-12T10:00:00+01:00", "2026-08-12T10:09:00+01:00",
+        "BNS", "CLJ", "Barnes", "Clapham Junction",
+        stop_calls=[
+            _stop_call("BNS", "Barnes", "2026-08-12T10:00:00+01:00", "2026-08-12T10:00:30+01:00"),
+            _stop_call("PUT", "Putney", "2026-08-12T10:03:00+01:00", "2026-08-12T10:03:30+01:00"),
+            _stop_call("WNT", "Wandsworth Town", "2026-08-12T10:06:00+01:00", "2026-08-12T10:06:30+01:00"),
+            _stop_call("CLJ", "Clapham Junction", "2026-08-12T10:09:00+01:00", "2026-08-12T10:09:30+01:00"),
+        ],
+    )
+    other_legs = _three_leg_journey_edge()["node"]["legs"][1:]
+    payload = {
+        "data": {
+            "planConnection": {
+                "edges": [{"node": {"legs": [leg_with_calls, *other_legs]}}]
+            }
+        }
+    }
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: FakeResponse(payload))
+
+    journeys = otp_client.plan_multi_change_journeys(BNS, PUL, dt.date(2026, 8, 12), dt.time(9, 0), 90)
+
+    stops = journeys[0].legs[0].intermediate_stops
+    assert [s.stop_code for s in stops] == ["PUT", "WNT"]
+    assert stops[0].stop_name == "Putney"
+    assert stops[0].arrival_time == "10:03:00"
+    assert stops[0].departure_time == "10:03:30"
+    # legs with no stopCalls at all (the default _leg() fixture) map to [].
+    assert journeys[0].legs[1].intermediate_stops == []
 
 
 def test_plan_multi_change_journeys_excludes_fewer_than_two_changes(monkeypatch):
