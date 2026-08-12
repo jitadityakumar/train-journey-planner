@@ -1,0 +1,32 @@
+services:
+  otp:
+    image: opentripplanner/opentripplanner
+    command: ["--load", "--port", "8080"]
+    volumes:
+      - ./graphs:/var/opentripplanner
+    # Bind only to this box's Tailscale IP, not 0.0.0.0 — reached over
+    # Tailscale from jkumar-server, never on a public interface. Set
+    # TAILSCALE_IP in .env (see .env.example) to jk-server-ccu's own
+    # tailscale0 address (`tailscale ip -4`). The ':?' is deliberate (found
+    # in Opus review, 2026-08-12): if .env is missing/unreadable or the key
+    # is misspelled, Compose would otherwise substitute an empty string and
+    # silently bind to 0.0.0.0 instead — this makes that fail loud (`up`
+    # errors out) rather than fail open.
+    ports:
+      - "${TAILSCALE_IP:?TAILSCALE_IP must be set in .env — see .env.example}:8080:8080"
+    healthcheck:
+      # No wget/curl in this image (Ubuntu-based, minimal) — bash is present,
+      # so use /dev/tcp to at least confirm the HTTP server is accepting
+      # connections. The main app's own health-check job (app/otp_client.py)
+      # does the real actuator-endpoint check over Tailscale.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/localhost/8080"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "7"

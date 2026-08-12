@@ -97,3 +97,54 @@ def test_refresh_validates_before_swapping_in(refresh_env, monkeypatch):
 
     assert not config.GTFS_DB_PATH.exists()
     assert list(config.DATA_DIR.glob(".gtfs.db.*.tmp")) == []
+
+
+def test_successful_refresh_persists_zip_and_checksum(refresh_env, fixture_zip):
+    refresh, config = refresh_env
+    refresh.refresh_if_missing()
+
+    assert config.GTFS_ZIP_PATH.exists()
+    assert config.GTFS_ZIP_PATH.read_bytes() == fixture_zip.read_bytes()
+
+    checksum = config.GTFS_ZIP_CHECKSUM_PATH.read_text().strip()
+    assert checksum == refresh._sha256(config.GTFS_ZIP_PATH)
+    assert list(config.DATA_DIR.glob(".gtfs.zip.*.tmp")) == []
+
+    # mkstemp defaults to 0600 — must be widened, or the OTP sidecar's
+    # non-root SSH-pull user can never read these files.
+    assert config.GTFS_ZIP_PATH.stat().st_mode & 0o777 == 0o644
+    assert config.GTFS_ZIP_CHECKSUM_PATH.stat().st_mode & 0o777 == 0o644
+
+
+def test_failed_refresh_does_not_persist_zip(refresh_env, monkeypatch):
+    refresh, config = refresh_env
+
+    def broken_download(url, dest):
+        dest.write_bytes(b"not a real zip file")
+
+    monkeypatch.setattr(refresh, "_download", broken_download)
+    refresh.refresh_dataset()
+
+    assert not config.GTFS_ZIP_PATH.exists()
+    assert not config.GTFS_ZIP_CHECKSUM_PATH.exists()
+    assert list(config.DATA_DIR.glob(".gtfs.zip.*.tmp")) == []
+
+
+def test_refresh_if_missing_cleans_up_stale_tmp_files_from_a_crashed_run(refresh_env):
+    """A crash mid-refresh (container kill, host reboot) can leave a
+    `.gtfs.db.*.tmp`/`.gtfs.zip.*.tmp`/`.gtfs.zip.sha256.*.tmp` behind —
+    these must be swept on the next startup, not accumulate indefinitely
+    (Opus review, 2026-08-12)."""
+    refresh, config = refresh_env
+    config.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    stale_db = config.DATA_DIR / ".gtfs.db.abc123.tmp"
+    stale_zip = config.DATA_DIR / ".gtfs.zip.abc123.tmp"
+    stale_checksum = config.DATA_DIR / ".gtfs.zip.sha256.abc123.tmp"
+    for f in (stale_db, stale_zip, stale_checksum):
+        f.write_bytes(b"leftover")
+
+    refresh.refresh_if_missing()
+
+    assert not stale_db.exists()
+    assert not stale_zip.exists()
+    assert not stale_checksum.exists()

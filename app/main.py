@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app import config, queries, validation
+from app import config, otp_client, queries, validation
 from app.db import get_readonly_connection
 from app.refresh import refresh_if_missing, start_scheduler
 from app.schemas import (
@@ -25,6 +25,9 @@ from app.schemas import (
     InterchangeTripOut,
     JourneyOut,
     JourneysResponse,
+    MultiChangeJourneyOut,
+    MultiChangeJourneysResponse,
+    MultiChangeLegOut,
     StationOut,
 )
 
@@ -58,8 +61,10 @@ async def lifespan(app: FastAPI):
     # already returns 503 while the dataset is missing.
     asyncio.create_task(asyncio.to_thread(refresh_if_missing))
     scheduler = start_scheduler()
+    otp_health_scheduler = otp_client.start_health_check_scheduler()
     yield
     scheduler.shutdown(wait=False)
+    otp_health_scheduler.shutdown(wait=False)
 
 
 app = FastAPI(title="UK Train Journey Planner", lifespan=lifespan)
@@ -73,6 +78,11 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 # there risks stalling startup behind API traffic or vice versa. Scoping the
 # semaphore to this middleware keeps it independent of that.
 _DB_ROUTE_PATHS = frozenset({"/api/direct", "/api/journeys", "/api/stations", "/results"})
+# /api/journeys/multi-change deliberately excluded: it only touches SQLite
+# for a cheap origin/destination station lookup (_validate_or_400), not the
+# expensive route-finding queries this concurrency budget (GitHub issue #20)
+# was sized around — the actual routing happens on the OTP sidecar, external
+# to this process and this budget.
 _db_request_semaphore = asyncio.Semaphore(config.MAX_CONCURRENT_DB_REQUESTS)
 
 
@@ -315,6 +325,45 @@ def _run_journeys_query(
         window_minutes=window_minutes,
         direct_only=direct_only,
         journeys=journey_outs,
+        sidecar_healthy=otp_client.is_sidecar_healthy(),
+    )
+
+
+def _multi_change_leg_out(leg: otp_client.MultiChangeLeg) -> MultiChangeLegOut:
+    return MultiChangeLegOut(
+        origin=StationOut(crs_code=leg.origin.stop_code, name=leg.origin.stop_name),
+        destination=StationOut(crs_code=leg.destination.stop_code, name=leg.destination.stop_name),
+        operator=leg.agency_name,
+        operator_code=leg.agency_id,
+        route_description=leg.route_description,
+        headsign=leg.headsign,
+        departure_time=leg.departure_time,
+        arrival_time=leg.arrival_time,
+        departure_next_day=leg.departure_next_day,
+        arrival_next_day=leg.arrival_next_day,
+        duration_minutes=leg.duration_minutes,
+        intermediate_stops=[
+            IntermediateStopOut(
+                stop_name=s.stop_name,
+                stop_code=s.stop_code,
+                arrival_time=s.arrival_time,
+                departure_time=s.departure_time,
+            )
+            for s in leg.intermediate_stops
+        ],
+    )
+
+
+def _multi_change_journey_out(journey: otp_client.MultiChangeJourney, query_date: dt.date) -> MultiChangeJourneyOut:
+    return MultiChangeJourneyOut(
+        legs=[_multi_change_leg_out(leg) for leg in journey.legs],
+        departure_time=journey.departure_time,
+        departure_next_day=journey.departure_next_day,
+        arrival_time=journey.arrival_time,
+        arrival_next_day=journey.arrival_next_day,
+        duration_minutes=journey.duration_minutes,
+        num_changes=journey.num_changes,
+        is_past=validation.trip_is_in_past(query_date, journey.departure_time, journey.departure_next_day),
     )
 
 
@@ -365,6 +414,64 @@ def api_journeys(
     stays direct-only and unchanged — this is the combined view (also what
     the web form/results page uses)."""
     return _run_journeys_query(conn, from_, to, date, time, window_minutes, direct_only)
+
+
+@app.get("/api/journeys/multi-change", response_model=MultiChangeJourneysResponse)
+def api_journeys_multi_change(
+    from_: str = Query(..., alias="from", min_length=3, max_length=3),
+    to: str = Query(..., min_length=3, max_length=3),
+    date: dt.date = Query(...),
+    time: dt.time = Query(...),
+    window_minutes: int = Query(config.DEFAULT_WINDOW_MINUTES, ge=1, le=config.MAX_JOURNEYS_WINDOW_MINUTES),
+    conn: sqlite3.Connection = Depends(get_db),
+):
+    """The 2-5 change fallback tier (GitHub issue #26), backed by the OTP
+    sidecar rather than this app's own SQLite index. Meant to be called by
+    the frontend only as a second stage, after /api/journeys' own
+    direct/1-change search comes back empty (two-stage UI, never blended —
+    see OTP_SIDECAR_PLAN.md decision #1). Never hard-fails: if the sidecar
+    is unhealthy or errors, returns an empty journey list with
+    sidecar_healthy=false rather than a 500 or 503, so the frontend can show
+    a degraded-mode banner instead of an error page (decision #2)."""
+    origin, destination = _validate_or_400(conn, from_, to, date, time)
+    # Done with SQLite now — everything below is the external sidecar call,
+    # which can hold this thread for up to OTP_REQUEST_TIMEOUT_SECONDS
+    # (default 10s). Closing here rather than waiting for get_db()'s own
+    # finally-block close (found in Opus review, 2026-08-12) means this
+    # endpoint doesn't sit on an open read connection for that whole window.
+    # Safe to double-close — sqlite3.Connection.close() is a no-op on an
+    # already-closed connection.
+    conn.close()
+
+    if not otp_client.is_sidecar_healthy():
+        return MultiChangeJourneysResponse(
+            origin=StationOut(crs_code=origin.stop_code, name=origin.stop_name),
+            destination=StationOut(crs_code=destination.stop_code, name=destination.stop_name),
+            date=date.isoformat(),
+            window_start=time.isoformat(timespec="minutes"),
+            window_minutes=window_minutes,
+            sidecar_healthy=False,
+            journeys=[],
+        )
+
+    try:
+        journeys = otp_client.plan_multi_change_journeys(origin, destination, date, time, window_minutes)
+    except otp_client.SidecarUnavailableError:
+        logger.exception("OTP sidecar call failed despite passing its last health check")
+        journeys = []
+        sidecar_healthy = False
+    else:
+        sidecar_healthy = True
+
+    return MultiChangeJourneysResponse(
+        origin=StationOut(crs_code=origin.stop_code, name=origin.stop_name),
+        destination=StationOut(crs_code=destination.stop_code, name=destination.stop_name),
+        date=date.isoformat(),
+        window_start=time.isoformat(timespec="minutes"),
+        window_minutes=window_minutes,
+        sidecar_healthy=sidecar_healthy,
+        journeys=[_multi_change_journey_out(j, date) for j in journeys],
+    )
 
 
 @app.get("/api/stations", response_model=list[StationOut])

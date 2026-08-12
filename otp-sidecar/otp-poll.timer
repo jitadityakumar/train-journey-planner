@@ -1,0 +1,10 @@
+[Unit]
+Description=Run otp-poll.service every 20 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

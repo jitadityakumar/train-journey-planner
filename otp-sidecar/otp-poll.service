@@ -1,0 +1,7 @@
+[Unit]
+Description=Poll jkumar-server for a changed GTFS feed and rebuild the OTP graph
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/otp-sidecar
+ExecStart=%h/otp-sidecar/poll_and_build.sh
