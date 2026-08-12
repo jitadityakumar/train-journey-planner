@@ -110,6 +110,11 @@ def test_successful_refresh_persists_zip_and_checksum(refresh_env, fixture_zip):
     assert checksum == refresh._sha256(config.GTFS_ZIP_PATH)
     assert list(config.DATA_DIR.glob(".gtfs.zip.*.tmp")) == []
 
+    # mkstemp defaults to 0600 — must be widened, or the OTP sidecar's
+    # non-root SSH-pull user can never read these files.
+    assert config.GTFS_ZIP_PATH.stat().st_mode & 0o777 == 0o644
+    assert config.GTFS_ZIP_CHECKSUM_PATH.stat().st_mode & 0o777 == 0o644
+
 
 def test_failed_refresh_does_not_persist_zip(refresh_env, monkeypatch):
     refresh, config = refresh_env

@@ -151,12 +151,20 @@ def refresh_dataset() -> None:
         # and never leaves the checksum pointing at a zip that isn't there.
         try:
             checksum = _sha256(zip_path)
+            # mkstemp creates files 0600 — unlike gtfs.db (which happens to
+            # end up 0644 because build_database() unlinks and lets sqlite3
+            # recreate it under the normal umask), the zip/checksum are
+            # written directly into their mkstemp'd file and would otherwise
+            # keep that restrictive mode forever, making them unreadable by
+            # the non-root SSH user the OTP sidecar's poller connects as.
+            os.chmod(zip_path, 0o644)
             os.replace(zip_path, config.GTFS_ZIP_PATH)
             checksum_fd, checksum_name = tempfile.mkstemp(
                 dir=config.DATA_DIR, prefix=".gtfs.zip.sha256.", suffix=".tmp"
             )
             with os.fdopen(checksum_fd, "w") as f:
                 f.write(checksum)
+            os.chmod(checksum_name, 0o644)
             os.replace(checksum_name, config.GTFS_ZIP_CHECKSUM_PATH)
         except Exception:
             logger.exception(
