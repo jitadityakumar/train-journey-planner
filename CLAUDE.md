@@ -153,6 +153,13 @@ OTP sidecar passed its last background health check (checked every
 whether calling `/api/journeys/multi-change` is currently worthwhile, not about `/api/journeys`
 itself, which never touches the sidecar.
 
+**Any caller wanting 2-5 change coverage must implement a two-step call pattern itself** — there
+is no single endpoint that transparently escalates. Call `/api/journeys` first; only if it
+returns zero journeys (and, ideally, `sidecar_healthy: true`), call `/api/journeys/multi-change`
+as a second, separate request. This app's own `/results` UI (`app/static/multi_change.js`)
+follows exactly this pattern and is the reference implementation. This is a deliberate design
+choice, not an oversight — see "Why not one endpoint?" below.
+
 ### `GET /api/journeys/multi-change` — 2-5 change fallback tier (OTP sidecar-backed)
 
 Added GitHub issue #26. Meant to be called only as a second stage, after `/api/journeys`
@@ -171,6 +178,28 @@ origin/destination CRS-code lookup, not the route search.
 **Never hard-fails.** If the sidecar is down, unreachable, or errors, this returns `200` with
 `sidecar_healthy: false` and `journeys: []` rather than a `4xx`/`5xx` — callers should treat
 that as "deeper search temporarily unavailable", not an error to retry aggressively.
+
+**Concurrency: this endpoint has its own, separate cap from `/api/journeys`.** `/api/journeys`
+(and `/api/direct`/`/api/stations`/`/results`) share `MAX_CONCURRENT_DB_REQUESTS` (default 4,
+GitHub issue #20) — a local, SQLite/CPU-bound budget. This endpoint is deliberately excluded
+from that gate (its cost is external, not local DB/CPU) and instead has its own
+`OTP_MAX_CONCURRENT_SIDECAR_REQUESTS` (default 4, `threading.Semaphore` with a short acquire
+timeout, degrades to `sidecar_healthy: false`/`journeys: []` rather than queuing). **A caller
+pacing concurrent requests must budget the two endpoints separately** — e.g. 4 concurrent
+`/api/journeys` calls and 4 concurrent `/api/journeys/multi-change` calls are each independently
+fine, but neither cap protects against exhausting the other. Note the sidecar-call cap applies
+per request to this endpoint, regardless of how many changes (2-5) the query actually resolves
+to inside OTP — a caller doesn't need to know the change count in advance to budget correctly.
+
+**Why not one endpoint?** Merging the two (e.g. an `include_multi_change=true` flag on
+`/api/journeys` that transparently falls back server-side) was considered and rejected for now:
+it would hide a real latency cliff behind a single call — `/api/journeys` is a local SQL query,
+this endpoint is a network round-trip to a separate host (`jk-server-ccu`) that can take
+0.8-1.8s even when healthy — and would take away a caller's ability to opt out of that slow
+path. This app's own `/results` UI genuinely needs the two stages to be visible (it shows a
+spinner only for the second stage), which is the main reason the split exists. A caller that
+doesn't want to implement the two-step pattern can simply never call
+`/api/journeys/multi-change` and only get direct/1-change results.
 
 Returns `MultiChangeJourneysResponse`:
 
