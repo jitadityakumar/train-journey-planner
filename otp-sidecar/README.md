@@ -16,6 +16,10 @@ covered. The only thing outside host-firewall control is the tailnet's own ACL p
 Tailscale admin console) — irrelevant if you've never customized it from the default
 allow-all-between-your-own-devices policy.
 
+`jk-server-ccu`'s UFW default policy is `deny (incoming)` (confirmed 2026-08-22) — this is
+what makes the `0.0.0.0:8080` bind below safe: only the explicit `tailscale0` allow rule lets
+anything reach the port, regardless of which interface the container listens on.
+
 ## One-time setup on jk-server-ccu
 
 1. Deploy the files here via `../deploy-otp-sidecar.sh` (run from `jkumar-server`, see its
@@ -29,10 +33,9 @@ allow-all-between-your-own-devices policy.
      `UPSTREAM_DATA_DIR` (jkumar-server's SSH details and the main app's `DATA_DIR` — this
      must point at a *host-readable* path, not a Docker named volume; the main app's
      `docker-compose.yml` uses a bind mount for exactly this reason, see its own comment).
-   - `cp .env.example .env` and set `TAILSCALE_IP` to this box's own Tailscale IP
-     (`tailscale ip -4`) — the serving container binds only to that address, never `0.0.0.0`
-     (and `docker-compose.prod.yml` now fails loud with a clear error if this is unset,
-     rather than silently binding wide).
+   - `.env`/`TAILSCALE_IP` is no longer needed (`docker-compose.prod.yml` now binds
+     `0.0.0.0:8080`, protected by the default-deny UFW policy above — see its own comment
+     for why).
    - Confirm SSH key-based auth from jk-server-ccu to jkumar-server works non-interactively
      (`ssh $UPSTREAM_USER@$UPSTREAM_HOST true`) — `poll_and_build.sh` has no retry/prompt
      logic, it just fails and gets retried on the next scheduled poll. A permission error, a

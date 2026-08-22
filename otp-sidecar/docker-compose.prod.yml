@@ -4,16 +4,19 @@ services:
     command: ["--load", "--port", "8080"]
     volumes:
       - ./graphs:/var/opentripplanner
-    # Bind only to this box's Tailscale IP, not 0.0.0.0 — reached over
-    # Tailscale from jkumar-server, never on a public interface. Set
-    # TAILSCALE_IP in .env (see .env.example) to jk-server-ccu's own
-    # tailscale0 address (`tailscale ip -4`). The ':?' is deliberate (found
-    # in Opus review, 2026-08-12): if .env is missing/unreadable or the key
-    # is misspelled, Compose would otherwise substitute an empty string and
-    # silently bind to 0.0.0.0 instead — this makes that fail loud (`up`
-    # errors out) rather than fail open.
+    # Bind 0.0.0.0, not this box's Tailscale IP. Switched 2026-08-22: binding
+    # to the Tailscale IP directly raced Tailscale's own startup on boot —
+    # Docker can come up (and attempt `restart: unless-stopped`) before
+    # tailscaled has reassigned the IP to tailscale0, so the bind fails and
+    # the container is left Exited with no automatic recovery (root-caused
+    # after a jk-server-ccu reboot left the sidecar down for 2 days). Safe to
+    # widen because jk-server-ccu's UFW defaults to deny (incoming) with only
+    # an explicit `Anywhere on tailscale0` allow rule — LAN/public-IPv6
+    # traffic to 8080 is blocked regardless of what the container binds to,
+    # so this doesn't change what's actually reachable, only removes the
+    # boot-order race. See otp-sidecar/README.md.
     ports:
-      - "${TAILSCALE_IP:?TAILSCALE_IP must be set in .env — see .env.example}:8080:8080"
+      - "8080:8080"
     healthcheck:
       # No wget/curl in this image (Ubuntu-based, minimal) — bash is present,
       # so use /dev/tcp to at least confirm the HTTP server is accepting
