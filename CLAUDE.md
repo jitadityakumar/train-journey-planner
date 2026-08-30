@@ -238,6 +238,15 @@ simplest way for another agent/app to resolve a station name to its CRS code.
 [{"crs_code": "BNS", "name": "Barnes"}, {"crs_code": "WAT", "name": "London Waterloo"}, ...]
 ```
 
+### `GET /api/gtfs/checksum`, `GET /api/gtfs/zip` — internal, not for journey queries
+
+Added GitHub issue #28. Serve the sha256 (plain text) and raw bytes of the `gtfs.zip` this
+app's own scheduled refresh last persisted (`app/refresh.py`, `config.GTFS_ZIP_PATH`/
+`GTFS_ZIP_CHECKSUM_PATH`) — pulled by the OTP sidecar's `poll_and_build.sh` on `jk-server-ccu`
+over plain HTTP (replacing an earlier SSH/SCP pull that Tailscale SSH check-mode could hang
+indefinitely). Both `404` if no refresh has completed yet. Not useful to a journey-planning
+caller — listed here only because they're part of this app's HTTP surface.
+
 ### `GET /health`
 
 `{"status": "ok", "dataset_present": true}`. `dataset_present: false` during a cold start
@@ -348,6 +357,9 @@ class MultiChangeJourneysResponse:     # added issue #26 — GET /api/journeys/m
 
 ## API field changes
 
+- **2026-08-30 (issue #28): added `GET /api/gtfs/checksum` and `GET /api/gtfs/zip`.** Internal
+  plumbing for the OTP sidecar's GTFS pull (see their own section above) — not relevant to
+  journey-planning callers, purely additive.
 - **2026-08-12 (issue #26): added `GET /api/journeys/multi-change`, `JourneysResponse.sidecar_healthy`,
   and the OTP-sidecar dependency described above.** Purely additive — no existing endpoint or
   field changed shape. The new endpoint depends on a separately-deployed OTP sidecar

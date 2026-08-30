@@ -36,21 +36,25 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ "$line" =~ ^([A-Za-z_][A-Za-z0-9_]*)=(.*)$ ]] && declare "${BASH_REMATCH[1]}=${BASH_REMATCH[2]}"
 done < "$ENV_FILE"
 
-for var in UPSTREAM_USER UPSTREAM_HOST UPSTREAM_DATA_DIR; do
-  if [[ -z "${!var:-}" ]]; then
-    echo "Error: $var is not set in $ENV_FILE — copy upstream.env.example and fill in all three values."
-    exit 1
-  fi
-done
+if [[ -z "${UPSTREAM_URL:-}" ]]; then
+  echo "Error: UPSTREAM_URL is not set in $ENV_FILE — copy upstream.env.example and fill it in."
+  exit 1
+fi
 
-UPSTREAM="$UPSTREAM_USER@$UPSTREAM_HOST"
 mkdir -p "$GRAPHS_DIR"
 
-remote_checksum="$(ssh "$UPSTREAM" "cat '$UPSTREAM_DATA_DIR/gtfs.zip.sha256'" 2>/dev/null || true)"
+# `-f` makes curl exit non-zero on a 4xx/5xx (e.g. the main app returning 404
+# because no refresh has completed yet) instead of writing the error body as
+# if it were the checksum — plain HTTP over the tailnet, replacing an
+# earlier SSH pull (GitHub issue #28: Tailscale SSH's check-mode silently
+# hangs unattended scheduled connections into jkumar-server). Bounded with
+# --connect-timeout/--max-time so a wedged-but-not-down main app (e.g. stuck
+# behind a DB lock, answering nothing rather than erroring) can't reproduce
+# that same silent-hang failure mode at the HTTP layer instead.
+remote_checksum="$(curl -fsS --connect-timeout 10 --max-time 30 "$UPSTREAM_URL/api/gtfs/checksum" 2>/dev/null || true)"
 if [[ -z "$remote_checksum" ]]; then
-  echo "$(date -Iseconds) poll: could not read remote checksum (unreachable, permission" \
-       "denied, or file missing — check 'ssh $UPSTREAM true' works non-interactively)," \
-       "skipping this run"
+  echo "$(date -Iseconds) poll: could not read remote checksum (unreachable, or not yet" \
+       "persisted — check 'curl $UPSTREAM_URL/api/gtfs/checksum' works), skipping this run"
   exit 0
 fi
 
@@ -74,7 +78,14 @@ else
 fi
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
-scp "$UPSTREAM:$UPSTREAM_DATA_DIR/gtfs.zip" "$BUILD_DIR/gtfs.zip"
+# --max-time is generous here (the zip is ~80MB, not a quick request like
+# the checksum above) but still bounded — same rationale as above.
+if ! curl -fsS --connect-timeout 10 --max-time 300 "$UPSTREAM_URL/api/gtfs/zip" -o "$BUILD_DIR/gtfs.zip"; then
+  echo "$(date -Iseconds) poll: could not fetch gtfs.zip from $UPSTREAM_URL/api/gtfs/zip," \
+       "skipping this run (next poll will retry)"
+  rm -rf "$BUILD_DIR"
+  exit 0
+fi
 
 # The checksum was read separately from the zip fetch just above (two
 # round-trips, not one atomic operation) — verify what actually landed

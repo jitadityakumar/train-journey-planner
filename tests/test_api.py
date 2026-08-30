@@ -375,6 +375,28 @@ def test_health_reports_dataset_present(client):
     assert r.json() == {"status": "ok", "dataset_present": True}
 
 
+def test_gtfs_checksum_and_zip_404_before_any_refresh(client):
+    # The `client` fixture seeds gtfs.db directly, bypassing app/refresh.py,
+    # so GTFS_ZIP_PATH/GTFS_ZIP_CHECKSUM_PATH are never written — same state
+    # as a fresh deploy before the first scheduled refresh completes.
+    assert client.get("/api/gtfs/checksum").status_code == 404
+    assert client.get("/api/gtfs/zip").status_code == 404
+
+
+def test_gtfs_checksum_and_zip_serve_persisted_files(client):
+    config.GTFS_ZIP_PATH.write_bytes(b"fake zip contents")
+    config.GTFS_ZIP_CHECKSUM_PATH.write_text("deadbeef\n")
+
+    checksum_r = client.get("/api/gtfs/checksum")
+    assert checksum_r.status_code == 200
+    assert checksum_r.text == "deadbeef"
+
+    zip_r = client.get("/api/gtfs/zip")
+    assert zip_r.status_code == 200
+    assert zip_r.content == b"fake zip contents"
+    assert zip_r.headers["content-type"] == "application/zip"
+
+
 def test_results_page_renders_golden_path(client):
     r = client.get(
         "/results",

@@ -10,11 +10,19 @@ how-to-run.
 
 No changes needed on either box. Both `jkumar-server` and `jk-server-ccu` already run `ufw`
 with a blanket `Anywhere on tailscale0` allow rule (confirmed 2026-08-12) — since all traffic
-between the two for this feature (the SSH pull in `poll_and_build.sh`, and the main app's
+between the two for this feature (the HTTP pull in `poll_and_build.sh`, and the main app's
 calls to the sidecar's port 8080) rides over `tailscale0` regardless of port, it's already
 covered. The only thing outside host-firewall control is the tailnet's own ACL policy (in the
 Tailscale admin console) — irrelevant if you've never customized it from the default
 allow-all-between-your-own-devices policy.
+
+The GTFS pull (`poll_and_build.sh`) used to go over SSH/SCP into `jkumar-server`; switched to
+plain HTTP against the main app's own `GET /api/gtfs/checksum`/`GET /api/gtfs/zip` endpoints
+(GitHub issue #28) because Tailscale SSH's check-mode on `jkumar-server` (used for the box
+owner's own interactive login) silently hangs unattended, scheduled SSH connections — this was
+the only such connection anywhere on the tailnet. No SSH key setup is needed for the poller
+any more; the endpoints are unauthenticated, reachable only over `tailscale0` like the rest of
+the app.
 
 `jk-server-ccu`'s UFW default policy is `deny (incoming)` (confirmed 2026-08-22) — this is
 what makes the `0.0.0.0:8080` bind below safe: only the explicit `tailscale0` allow rule lets
@@ -29,19 +37,16 @@ anything reach the port, regardless of which interface the container listens on.
    `systemctl --user daemon-reload` — re-run the deploy script any time those files change,
    it's safe to re-run repeatedly.
 2. On jk-server-ccu, in the deployed directory (`$HOME/otp-sidecar`):
-   - `cp upstream.env.example upstream.env` and fill in `UPSTREAM_USER`/`UPSTREAM_HOST`/
-     `UPSTREAM_DATA_DIR` (jkumar-server's SSH details and the main app's `DATA_DIR` — this
-     must point at a *host-readable* path, not a Docker named volume; the main app's
-     `docker-compose.yml` uses a bind mount for exactly this reason, see its own comment).
+   - `cp upstream.env.example upstream.env` and fill in `UPSTREAM_URL` (jkumar-server's
+     Tailscale IP:port, e.g. `http://100.71.231.39:8010` — the main app must already be
+     running there with at least one successful refresh completed, so `/api/gtfs/zip` has
+     something to serve).
    - `.env`/`TAILSCALE_IP` is no longer needed (`docker-compose.prod.yml` now binds
      `0.0.0.0:8080`, protected by the default-deny UFW policy above — see its own comment
      for why).
-   - Confirm SSH key-based auth from jk-server-ccu to jkumar-server works non-interactively
-     (`ssh $UPSTREAM_USER@$UPSTREAM_HOST true`) — `poll_and_build.sh` has no retry/prompt
-     logic, it just fails and gets retried on the next scheduled poll. A permission error, a
-     host-key prompt, and a genuine network blip all look the same in its logs (a generic
-     "could not read remote checksum" line) — if the poller never seems to build anything,
-     start by confirming this SSH call works before assuming the checksum logic is at fault.
+   - Confirm the endpoints are reachable non-interactively
+     (`curl -fsS "$UPSTREAM_URL/api/gtfs/checksum"`) — `poll_and_build.sh` has no
+     retry/prompt logic, it just fails and gets retried on the next scheduled poll.
 3. Run `./poll_and_build.sh` once by hand to do the first build (~6 minutes, ~8.8GB peak
    RAM) and bring up the serving container.
 4. Enable the poll timer (already installed by the deploy script above):
