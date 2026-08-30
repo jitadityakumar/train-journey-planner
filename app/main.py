@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -479,6 +479,30 @@ def api_stations(conn: sqlite3.Connection = Depends(get_db)):
     """All stations in the loaded feed — powers the search-by-name/CRS
     autocomplete on the web form."""
     return [StationOut(crs_code=s.stop_code, name=s.stop_name) for s in queries.list_stations(conn)]
+
+
+@app.get("/api/gtfs/checksum", response_class=PlainTextResponse)
+def api_gtfs_checksum():
+    """Sha256 of the currently-persisted `gtfs.zip` (see `app/refresh.py`),
+    as plain text. Pulled by the OTP sidecar's `poll_and_build.sh` on
+    jk-server-ccu to check for a changed feed before fetching the zip
+    itself — replaces an earlier SSH/SCP-based pull (GitHub issue #28),
+    removed because Tailscale SSH's check-mode silently hangs unattended
+    scheduled connections. Tailnet-reachable only, no auth, same as every
+    other endpoint here."""
+    if not config.GTFS_ZIP_CHECKSUM_PATH.exists():
+        raise HTTPException(status_code=404, detail="gtfs.zip.sha256 not yet persisted (no refresh has completed)")
+    return config.GTFS_ZIP_CHECKSUM_PATH.read_text().strip()
+
+
+@app.get("/api/gtfs/zip")
+def api_gtfs_zip():
+    """The currently-persisted `gtfs.zip` (see `app/refresh.py`), streamed
+    to disk by the OTP sidecar poller. See `api_gtfs_checksum` above for
+    context — same feature, issue #28."""
+    if not config.GTFS_ZIP_PATH.exists():
+        raise HTTPException(status_code=404, detail="gtfs.zip not yet persisted (no refresh has completed)")
+    return FileResponse(config.GTFS_ZIP_PATH, media_type="application/zip", filename="gtfs.zip")
 
 
 @app.get("/health")
