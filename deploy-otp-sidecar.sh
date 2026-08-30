@@ -77,12 +77,21 @@ ssh "$REMOTE" "test -f '$REMOTE_APP_DIR/upstream.env'" || {
   scp "$SCRIPT_DIR/otp-sidecar/upstream.env.example" "$REMOTE:$REMOTE_APP_DIR/upstream.env.example"
 }
 ssh "$REMOTE" "test -f '$REMOTE_APP_DIR/.env'" || {
-  echo "==> Seeding .env.example (fill in TAILSCALE_IP on the remote box)"
+  echo "==> Seeding .env.example (no longer needed to fill in — see its own comment)"
   scp "$SCRIPT_DIR/otp-sidecar/.env.example" "$REMOTE:$REMOTE_APP_DIR/.env.example"
 }
 
-echo "==> Pulling OTP image on remote"
-ssh "$REMOTE" "docker pull opentripplanner/opentripplanner"
+# Pinned by digest, matching docker-compose.prod.yml's `otp` service and
+# poll_and_build.sh's OTP_IMAGE — do NOT change this to a bare `docker pull
+# opentripplanner/opentripplanner` (implicit `latest`). That let the image
+# drift to a newer OTP build than the one the last graph.obj was built with,
+# and the serving container refused to load it ("graph file is incompatible
+# with this version of OTP") — found 2026-08-30, crash-looped undetected for
+# a week. Bump the digest in all three places together, deliberately, then
+# force a graph rebuild.
+OTP_IMAGE="opentripplanner/opentripplanner@sha256:a7eac7da397faa9ec9dee407d4204895d24df4981500662fa6793aae0e71fd8f"
+echo "==> Pulling OTP image on remote ($OTP_IMAGE)"
+ssh "$REMOTE" "docker pull '$OTP_IMAGE'"
 
 echo "==> Done. On $REMOTE_HOST, in $REMOTE_APP_DIR:"
 echo "    - fill in upstream.env and .env if this was a first deploy (see README.md)"

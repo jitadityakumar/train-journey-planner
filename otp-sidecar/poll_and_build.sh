@@ -105,9 +105,24 @@ fi
 
 cp "$SCRIPT_DIR/otp-config.json" "$BUILD_DIR/otp-config.json"
 
+# Pinned by digest, matching docker-compose.prod.yml's `otp` service and
+# deploy-otp-sidecar.sh's pull — must always match, or the serving container
+# refuses to load a graph built by a different OTP version ("graph file is
+# incompatible with this version of OTP"). This is exactly what happened
+# when this line pulled unpinned `opentripplanner/opentripplanner` (implicit
+# `latest`, a rolling dev-2.x SNAPSHOT tag): the graph built here landed on
+# ser.ver.id 270 while the serving image was still ser.ver.id 269, and the
+# container crash-looped for a week (found 2026-08-30) with nothing to
+# advance the checksum and force a retry, since the build itself "succeeded".
+# 2.9.0 (pinned here) is a genuine numbered release off `master`, not a
+# `dev-2.x` snapshot — bump all three places together, deliberately, then
+# force a rebuild; never let any of them float independently or track
+# `latest`.
+OTP_IMAGE="opentripplanner/opentripplanner@sha256:a7eac7da397faa9ec9dee407d4204895d24df4981500662fa6793aae0e71fd8f"
+
 echo "$(date -Iseconds) poll: building graph"
 if docker run --rm -v "$BUILD_DIR:/var/opentripplanner" \
-    opentripplanner/opentripplanner --build --save; then
+    "$OTP_IMAGE" --build --save; then
   mv "$BUILD_DIR/graph.obj" "$GRAPHS_DIR/graph.obj"
   # otp-config.json (enables ActuatorAPI) also needs to live in GRAPHS_DIR
   # itself, not just BUILD_DIR — the serving container (docker-compose.prod.yml)
