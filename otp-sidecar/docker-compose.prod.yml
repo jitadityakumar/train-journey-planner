@@ -1,6 +1,17 @@
 services:
   otp:
-    image: opentripplanner/opentripplanner
+    # Pinned by digest (2.9.0, a genuine numbered release off `master`, not
+    # a `dev-2.x` SNAPSHOT) — must match the digest poll_and_build.sh builds
+    # the graph with (see its own comment) and deploy-otp-sidecar.sh pulls,
+    # or the serving container refuses to load the graph ("graph file is
+    # incompatible with this version of OTP"). Found 2026-08-30: this
+    # service had drifted to unpinned `latest`, which resolves to whatever
+    # dev-2.x snapshot Docker Hub last pushed — the graph poll_and_build.sh
+    # built (also then-unpinned) landed on a newer serialization version
+    # than this container, and it crash-looped for a week undetected.
+    # Bump all three places together, deliberately, then force a rebuild —
+    # never let any of them float independently or track `latest` again.
+    image: opentripplanner/opentripplanner@sha256:a7eac7da397faa9ec9dee407d4204895d24df4981500662fa6793aae0e71fd8f
     command: ["--load", "--port", "8080"]
     volumes:
       - ./graphs:/var/opentripplanner
