@@ -100,14 +100,44 @@ def build_database(gtfs_dir: Path, db_path: Path) -> None:
         _load_stops(gtfs_dir, conn)
         _load_agency(gtfs_dir, conn)
         _load_routes(gtfs_dir, conn)
-        _load_trips(gtfs_dir, conn)
-        _load_stop_times(gtfs_dir, conn)
+        duplicate_service_ids = _find_duplicate_calendar_service_ids(gtfs_dir)
+        excluded_trip_ids = _load_trips(gtfs_dir, conn, duplicate_service_ids)
+        _load_stop_times(gtfs_dir, conn, excluded_trip_ids)
         _build_trip_continuations(conn)
-        _load_calendar(gtfs_dir, conn)
-        _load_calendar_dates(gtfs_dir, conn)
+        _load_calendar(gtfs_dir, conn, duplicate_service_ids)
+        _load_calendar_dates(gtfs_dir, conn, duplicate_service_ids)
         conn.commit()
     finally:
         conn.close()
+
+
+def _find_duplicate_calendar_service_ids(gtfs_dir: Path) -> set[str]:
+    """`calendar.txt`'s `service_id` must be unique per the GTFS spec, but a
+    malformed upstream feed can violate this (GitHub issue #32 — TravelWhiz's
+    feed emitted the same `service_id` for two entirely unrelated services
+    from different operators, apparently a collision in their ID generation,
+    not a revision of the same service — their date ranges genuinely
+    overlapped with different day-patterns, so there was no principled way
+    to pick a "correct" row).
+
+    Trips referencing a duplicate service_id are excluded from this build
+    entirely (see `_load_trips`/`_load_stop_times`) rather than guessing
+    which calendar row should apply to them — a wrong guess would silently
+    misschedule real trips, which is worse than the trips being temporarily
+    absent. This self-heals with no code change once the upstream duplicate
+    is gone.
+    """
+    service_ids = pd.read_csv(gtfs_dir / "calendar.txt", dtype=str, usecols=["service_id"])["service_id"]
+    counts = service_ids.value_counts()
+    duplicates = set(counts[counts > 1].index)
+    if duplicates:
+        logger.warning(
+            "_find_duplicate_calendar_service_ids: calendar.txt has %d duplicate "
+            "service_id(s), violating the GTFS spec's uniqueness requirement — "
+            "excluding every trip referencing them from this build: %s",
+            len(duplicates), sorted(duplicates),
+        )
+    return duplicates
 
 
 def _load_stops(gtfs_dir: Path, conn: sqlite3.Connection) -> None:
@@ -142,23 +172,38 @@ def _load_routes(gtfs_dir: Path, conn: sqlite3.Connection) -> None:
     conn.execute("CREATE UNIQUE INDEX idx_routes_route_id ON routes(route_id)")
 
 
-def _load_trips(gtfs_dir: Path, conn: sqlite3.Connection) -> None:
+def _load_trips(gtfs_dir: Path, conn: sqlite3.Connection, excluded_service_ids: set[str]) -> pd.Series:
+    """Returns the trip_ids dropped for referencing a duplicate service_id,
+    so `_load_stop_times` can remove only those rows — not a blanket
+    trips-membership filter, which would also silently swallow any
+    unrelated orphaned `stop_times.txt` row (a different feed problem this
+    fix isn't meant to mask, and previously loaded as-is)."""
     df = pd.read_csv(
         gtfs_dir / "trips.txt",
         dtype=str,
         usecols=["trip_id", "route_id", "service_id", "trip_headsign", "trip_short_name"],
     )
+    excluded_trip_ids = df.loc[df["service_id"].isin(excluded_service_ids), "trip_id"]
+    if len(excluded_trip_ids):
+        df = df[~df["trip_id"].isin(excluded_trip_ids)]
+        logger.warning(
+            "_load_trips: dropped %d trip(s) referencing a duplicate calendar.txt "
+            "service_id (see _find_duplicate_calendar_service_ids)", len(excluded_trip_ids),
+        )
     df.to_sql("trips", conn, if_exists="replace", index=False)
     conn.execute("CREATE UNIQUE INDEX idx_trips_trip_id ON trips(trip_id)")
     conn.execute("CREATE INDEX idx_trips_service_id ON trips(service_id)")
+    return excluded_trip_ids
 
 
-def _load_stop_times(gtfs_dir: Path, conn: sqlite3.Connection) -> None:
+def _load_stop_times(gtfs_dir: Path, conn: sqlite3.Connection, excluded_trip_ids: pd.Series) -> None:
     df = pd.read_csv(
         gtfs_dir / "stop_times.txt",
         dtype=str,
         usecols=["trip_id", "arrival_time", "departure_time", "stop_id", "stop_sequence"],
     )
+    if len(excluded_trip_ids):
+        df = df[~df["trip_id"].isin(excluded_trip_ids)]
     df["stop_sequence"] = df["stop_sequence"].astype(int)
     df["arrival_secs"] = _time_to_seconds(df["arrival_time"])
     df["departure_secs"] = _time_to_seconds(df["departure_time"])
@@ -520,19 +565,30 @@ def _synthesize_continuation_trip(
     )
 
 
-def _load_calendar(gtfs_dir: Path, conn: sqlite3.Connection) -> None:
+def _load_calendar(gtfs_dir: Path, conn: sqlite3.Connection, excluded_service_ids: set[str]) -> None:
     df = pd.read_csv(gtfs_dir / "calendar.txt", dtype=str)
     day_cols = [
         "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday",
     ]
     df[day_cols] = df[day_cols].astype(int)
+    if excluded_service_ids:
+        # Every row for a duplicate service_id is dropped, not just all-but-one —
+        # no trip references these service_ids any more (see _load_trips), and
+        # keeping a row here with nothing pointing at it is dead weight that
+        # would also make the UNIQUE index below fail again.
+        df = df[~df["service_id"].isin(excluded_service_ids)]
     df.to_sql("calendar", conn, if_exists="replace", index=False)
     conn.execute("CREATE UNIQUE INDEX idx_calendar_service_id ON calendar(service_id)")
 
 
-def _load_calendar_dates(gtfs_dir: Path, conn: sqlite3.Connection) -> None:
+def _load_calendar_dates(gtfs_dir: Path, conn: sqlite3.Connection, excluded_service_ids: set[str]) -> None:
     df = pd.read_csv(gtfs_dir / "calendar_dates.txt", dtype=str)
     df["exception_type"] = df["exception_type"].astype(int)
+    if excluded_service_ids:
+        # Same dead-weight cleanup as _load_calendar: no trip references
+        # these service_ids any more, so any exception rows for them here
+        # are inert but pointless to keep.
+        df = df[~df["service_id"].isin(excluded_service_ids)]
     df.to_sql("calendar_dates", conn, if_exists="replace", index=False)
     conn.execute(
         "CREATE INDEX idx_calendar_dates_lookup ON calendar_dates(service_id, date)"
